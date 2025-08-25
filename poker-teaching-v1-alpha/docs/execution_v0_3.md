@@ -1,0 +1,6 @@
+- Scaffold
+- OpenAPI v1
+- Domain core
+- CI baseline
+- Minimal demo + teaching view
+- ADR-001/002 included
