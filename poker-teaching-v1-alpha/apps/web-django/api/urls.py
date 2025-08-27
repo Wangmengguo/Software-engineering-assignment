@@ -9,6 +9,7 @@ from .views_play import (
     session_state_api,
     session_next_api,
 )
+from .views_suggest import SuggestView
 
 urlpatterns = [
     path("table/deal", deal_hand_api, name="deal"),
@@ -24,4 +25,5 @@ urlpatterns = [
     path("hand/act/<str:hand_id>", hand_act_api, name="hand_act"),
     path("session/<str:session_id>/state", session_state_api, name="session_state"),
     path("session/next", session_next_api, name="session_next"),
+    path("suggest", SuggestView.as_view(), name="suggest"),
 ]

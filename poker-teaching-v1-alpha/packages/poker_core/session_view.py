@@ -1,9 +1,6 @@
-# 过渡：从 gs 折叠
-from dataclasses import asdict, is_dataclass
-from typing import Any
 from poker_core.session_types import SessionView
 
-# 目标：从持久化 Session 折叠（在 Django 层调用）
+# 从持久化 Session 折叠（在 Django 层调用）
 def snapshot_session_from_model(session_model) -> SessionView:
     return SessionView(
         session_id=session_model.session_id,

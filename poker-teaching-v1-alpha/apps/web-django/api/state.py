@@ -41,11 +41,11 @@ def snapshot_state(gs: Any) -> dict:
         if is_dataclass(p): p = asdict(p)
         out["players"].append({
             "stack": p.get("stack"),
-            "bet":   p.get("bet", 0),
+            # 将引擎的 invested_street 暴露为 bet，便于 UI 一致理解
+            "bet":   p.get("invested_street", p.get("bet", 0)),
             # 教学期可直接返回 hole；将来要做权限/隐藏
             "hole":  p.get("hole", []),
         })
     # legal_actions 调用领域函数（由视图层负责调用更合适，这里留出位）
     return out
-
 

@@ -10,14 +10,13 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from drf_spectacular.utils import extend_schema, inline_serializer
 from .models import Replay, Session
-from .state import SESSIONS, HANDS, snapshot_state
+from .state import HANDS, snapshot_state
 from django.shortcuts import get_object_or_404
 from poker_core.session_types import SessionView
 from poker_core.session_flow import next_hand
 
 # 领域函数（按你项目的实际导入路径调整）
 from poker_core.state_hu import (
-    start_session as _start_session,
     start_hand as _start_hand,
     legal_actions as _legal_actions,
     apply_action as _apply_action,
@@ -41,11 +40,14 @@ def _extract_outcome_from_events(gs) -> dict | None:
 @extend_schema(
     request=inline_serializer(name="StartSessionReq", fields={
         "init_stack": serializers.IntegerField(required=False, default=200, min_value=1),
+        "sb": serializers.IntegerField(required=False, default=1, min_value=1),
+        "bb": serializers.IntegerField(required=False, default=2, min_value=2),
     }),
     responses={200: inline_serializer(name="StartSessionResp", fields={
         "session_id": serializers.CharField(),
         "button": serializers.IntegerField(),
         "stacks": serializers.ListField(child=serializers.IntegerField()),
+        "config": serializers.JSONField(),
     })}
 )
 @api_view(["POST"])
@@ -63,8 +65,7 @@ def session_start_api(request):
         hand_counter=1,
         status="running",
     )
-    SESSIONS[session_id] = {"config": s.config}
-    return Response({"session_id": session_id, "config": s.config})
+    return Response({"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config})
 
 
 # ---------- 2) POST /hand/start ----------
@@ -274,6 +275,9 @@ SessionStateResp = inline_serializer(
         "session_id": serializers.CharField(),
         "button": serializers.IntegerField(),
         "stacks": serializers.ListField(child=serializers.IntegerField()),
+        "stacks_after_blinds": serializers.ListField(child=serializers.IntegerField(), allow_null=True),
+        "sb": serializers.IntegerField(),
+        "bb": serializers.IntegerField(),
         "hand_counter": serializers.IntegerField(),
         "current_hand_id": serializers.CharField(required=False, allow_null=True),
     }
@@ -284,15 +288,24 @@ SessionStateResp = inline_serializer(
 def session_state_api(request, session_id: str):
     s = get_object_or_404(Session, session_id=session_id)
     # 尝试从内存映射取当前手（教学期：最后一次启动的 hand）
-    current_hand_id = None
+    current_hand_id, latest_gs = None, None
     for hid, item in reversed(list(HANDS.items())):
         if item.get("session_id") == session_id:
             current_hand_id = hid
+            latest_gs = item.get("gs")
             break
+    stacks_after_blinds = None
+    if latest_gs:
+        stacks_after_blinds = [latest_gs.players[0].stack, latest_gs.players[1].stack]
+    sb = int((s.config or {}).get("sb", 1))
+    bb = int((s.config or {}).get("bb", 2))
     return Response({
         "session_id": s.session_id,
         "button": s.button,
         "stacks": s.stacks,
+        "stacks_after_blinds": stacks_after_blinds,
+        "sb": sb,
+        "bb": bb,
         "hand_counter": s.hand_counter,
         "current_hand_id": current_hand_id,
     })

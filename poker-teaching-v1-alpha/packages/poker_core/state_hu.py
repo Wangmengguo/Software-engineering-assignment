@@ -41,6 +41,8 @@ class GameState:
     deck: List[str]
     board: List[str]
     players: Tuple[Player, Player] # 固定为座位顺序：seat0, seat1。角色由 button 推导
+    sb: int
+    bb: int
     pot: int
     to_act: int                    # 当前行动者 index
     last_bet: int                  # 本街最近一次投注额（用于 min raise 的简化）
@@ -50,10 +52,10 @@ class GameState:
     checks_in_round: int
     last_raise_size: int = 0       # 上一次“加注的增量”（用于最小加注规则）
 
-def start_session(init_stack: int = 200) -> Dict:
+def start_session(init_stack: int = 200, sb: int = SB, bb: int = BB) -> Dict:
     """返回对局配置（教学化，最小字典即可），真实对局对象我们不落库。"""
     return {
-        "sb": SB, "bb": BB, "init_stack": init_stack,
+        "sb": sb, "bb": bb, "init_stack": init_stack,
     }
 
 def start_hand(session_cfg: Dict, session_id: str, hand_id: str, button: int, seed: Optional[int] = None) -> GameState:
@@ -69,17 +71,19 @@ def start_hand(session_cfg: Dict, session_id: str, hand_id: str, button: int, se
     p1_hole = [deck[1], deck[3]]
     deck = deck[4:]
     init_stack = session_cfg["init_stack"]
+    sb = int(session_cfg.get("sb", 1))
+    bb = int(session_cfg.get("bb", 2)) 
     btn = button % 2
 
     # 固定按座位创建玩家，随后根据 button 决定谁贴盲
     if btn == 0:
         # seat0 为按钮/SB，seat1 为 BB
-        p0 = Player(stack=init_stack - SB, hole=p0_hole, invested_street=SB)
-        p1 = Player(stack=init_stack - BB, hole=p1_hole, invested_street=BB)
+        p0 = Player(stack=init_stack - sb, hole=p0_hole, invested_street=sb)
+        p1 = Player(stack=init_stack - bb, hole=p1_hole, invested_street=bb)
     else:
         # seat1 为按钮/SB，seat0 为 BB
-        p0 = Player(stack=init_stack - BB, hole=p0_hole, invested_street=BB)
-        p1 = Player(stack=init_stack - SB, hole=p1_hole, invested_street=SB)
+        p0 = Player(stack=init_stack - bb, hole=p0_hole, invested_street=bb)
+        p1 = Player(stack=init_stack - sb, hole=p1_hole, invested_street=sb)
 
     gs = GameState(
         session_id=session_id,
@@ -90,17 +94,19 @@ def start_hand(session_cfg: Dict, session_id: str, hand_id: str, button: int, se
         board=[],
         players=(p0, p1),
         pot=0,
+        sb=sb,
+        bb=bb,
         to_act=btn,           # HU 规则：preflop 由按钮（SB）先行动
-        last_bet=BB,          # 视为当前最高注（BB），便于 min-raise 简化
+        last_bet=bb,          # 视为当前最高注（BB），便于 min-raise 简化
         events=[],
         open_bet=True,
         checks_in_round=0,
-        last_raise_size=BB    # preflop 初始最小加注增量为 BB
+        last_raise_size=bb    # preflop 初始最小加注增量为 BB
     )
     # 依据按钮记录盲注事件（who 为座位 index）
     sb_idx, bb_idx = btn, 1 - btn
-    gs.events.append({"t":"blind", "who":sb_idx, "amt":SB})
-    gs.events.append({"t":"blind", "who":bb_idx, "amt":BB})
+    gs.events.append({"t":"blind", "who":sb_idx, "amt":sb})
+    gs.events.append({"t":"blind", "who":bb_idx, "amt":bb})
     gs.events.append({"t":"deal_hole", "p0":p0_hole, "p1":p1_hole})
     return gs
 
@@ -139,7 +145,7 @@ def legal_actions(gs: GameState) -> List[str]:
                 acts.append("bet")
             # preflop 仅盲注对齐后，BB 可在 to_call==0 时选择加注
             if (
-                gs.street == "preflop" and gs.open_bet and gs.last_bet == BB and gs.to_act == (1 - gs.button)
+                gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and gs.to_act == (1 - gs.button)
             ):
                 acts.append("raise")
             acts.append("allin")
@@ -235,7 +241,7 @@ def _maybe_advance_street(gs: GameState) -> GameState:
                 # - 若仅有盲注（last_bet == BB），SB 补齐后需要 BB 再 check 一次才关闭本街；
                 # - 若已出现主动 bet/raise（last_bet > BB），则 call 后可立即进入下一街。
                 if gs.street == "preflop":
-                    if gs.last_bet > BB:
+                    if gs.last_bet > gs.bb:
                         return _advance(nxt)
                     if gs.checks_in_round >= 1:
                         return _advance(nxt)
@@ -296,7 +302,7 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
         assert to_call == 0
         if gs.open_bet:
             raise ValueError("cannot bet when betting already opened")
-        min_bet = BB
+        min_bet = gs.bb
         bet = amount if amount is not None else min_bet
         bet = max(min_bet, bet)
         bet = min(bet, me.stack)  # all-in 也算 bet
@@ -310,7 +316,7 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
         # 常规：已有下注/加注（to_call>0）；
         # 特例：preflop 仅盲注对齐后（open_bet=True 且 last_bet==BB）且轮到 BB，to_call==0 也允许加注。
         preflop_blind_raise = (
-            gs.street == "preflop" and gs.open_bet and gs.last_bet == BB and to_call == 0 and actor == (1 - gs.button)
+            gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and to_call == 0 and actor == (1 - gs.button)
         )
         if not preflop_blind_raise:
             assert to_call > 0
@@ -358,7 +364,7 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
                 return gs
             # preflop 仅盲注对齐时 BB 的 all-in 视为 raise（需达到最小加注增量）
             preflop_blind_raise = (
-                gs.street == "preflop" and gs.open_bet and gs.last_bet == BB and actor == (1 - gs.button)
+                gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and actor == (1 - gs.button)
             )
             if preflop_blind_raise:
                 min_inc = max(1, gs.last_raise_size)

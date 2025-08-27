@@ -20,11 +20,18 @@ Open:
 
 ## Key API Routes (v0.4+)
 - `POST /api/v1/session/start`: create a HU session
+- `GET  /api/v1/session/<session_id>/state`: session view
+  - `stacks`: carry-over stacks before blinds (P0,P1)
+  - `stacks_after_blinds`: current hand stacks after blinds (nullable when no hand yet)
+- `POST /api/v1/session/next`: advance to next hand in the session
 - `POST /api/v1/hand/start`: start a hand in a session (optional `seed`)
 - `GET  /api/v1/hand/<hand_id>/state`: query current hand state + `legal_actions`
 - `POST /api/v1/hand/<hand_id>/act`: apply an action (`check/call/bet/raise/fold/allin`)
 - `GET  /api/v1/hand/<hand_id>/replay`: fetch replay payload (primary route)
   - Compat alias: `GET /api/v1/replay/<hand_id>`
+- `POST /api/v1/suggest`: get a minimal suggestion for `{hand_id, actor}`
+  - Response: `{hand_id, actor, suggested{action,amount?}, rationale[], policy}`
+  - Errors: `404 not found`, `409 not actor's turn / hand ended`, `422 cannot produce a legal suggestion`
 
 ## PostgreSQL (optional)
 ```bash

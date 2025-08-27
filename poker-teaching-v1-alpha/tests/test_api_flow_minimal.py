@@ -2,6 +2,7 @@ import json
 import pytest
 from django.test import Client
 
+@pytest.mark.django_db
 def test_minimal_flow():
     c = Client()
     r = c.post("/api/v1/session/start", data=json.dumps({}), content_type="application/json")
