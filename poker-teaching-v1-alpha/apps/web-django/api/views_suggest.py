@@ -5,10 +5,11 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from poker_core.suggest.service import build_suggestion
 from poker_core.domain.actions import legal_actions_struct
+from . import metrics  # Prometheus/StatsD 封装
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 import logging
 from .state import HANDS
-import hashlib, json
+import hashlib, json, time
 
 logger = logging.getLogger(__name__)
 
@@ -59,42 +60,41 @@ class SuggestView(APIView):
         if getattr(gs, "street", None) == "complete":
             return Response({"detail": "hand already ended"}, status=status.HTTP_409_CONFLICT)
 
+        t0 = time.perf_counter()
+        policy = "unknown"
         try:
-            # 观测：记录合法动作摘要（便于复现）
-            try:
-                la_struct = legal_actions_struct(gs)
-                la_compact = [
-                    {k: v for k, v in {
-                        "a": a.action,
-                        "min": a.min,
-                        "max": a.max,
-                        "tc": a.to_call,
-                    }.items() if v is not None}
-                    for a in la_struct
-                ]
-                la_json = json.dumps(la_compact, separators=(",", ":"), ensure_ascii=False)
-                la_hash = hashlib.sha1(la_json.encode("utf-8")).hexdigest()[:8]
-            except Exception:
-                la_hash = None
-                la_json = None
-
             resp = build_suggestion(gs, actor)
-            # 结构化日志
+            policy = resp.get("policy", "unknown")
             logger.info(
                 "suggest",
                 extra={
                     "hand_id": hand_id,
                     "actor": actor,
+                    "street": gs.street,
                     "policy": resp.get("policy"),
                     "action": resp.get("suggested", {}).get("action"),
                     "amount": resp.get("suggested", {}).get("amount"),
-                    "la_hash": la_hash,
-                    # 警惕日志体积，必要时去掉 la_compact
-                    # "la_compact": la_json,
                 },
             )
+            try:
+                metrics.inc_action(resp.get("policy"), resp.get("suggested", {}).get("action"), street=gs.street)
+            except Exception:
+                pass
             return Response(resp, status=status.HTTP_200_OK)
         except PermissionError:
+            try:
+                metrics.inc_error("not_turn", street=gs.street)
+            except Exception:
+                pass
             return Response({"detail": "not actor's turn"}, status=status.HTTP_409_CONFLICT)
         except ValueError as e:
+            try:
+                metrics.inc_error("value_error", street=gs.street)
+            except Exception:
+                pass
             return Response({"detail": f"suggest failed: {e}"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        finally:
+            try:
+                metrics.observe_latency(policy, gs.street, time.perf_counter() - t0)
+            except Exception:
+                pass

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Dict, Any
 from ..domain.actions import to_act_index, legal_actions_struct, LegalAction
-from .policy import policy_preflop_v0
+from .policy import policy_preflop_v0, policy_postflop_v0_3
 
 def _clamp_amount_if_needed(suggested: Dict[str, Any], acts: list[LegalAction]) -> Dict[str, Any]:
     name = suggested.get("action")
@@ -36,7 +36,12 @@ def build_suggestion(gs, actor: int) -> Dict[str, Any]:
     if cur != actor:
         raise PermissionError("actor is not to_act")
 
-    suggested, rationale, policy = policy_preflop_v0(gs, actor)
+    street = getattr(gs, "street", "preflop")
+    if street == "preflop":
+        suggested, rationale, policy = policy_preflop_v0(gs, actor)
+    else:
+        # flop/turn/river 统一走 postflop_v0_3
+        suggested, rationale, policy = policy_postflop_v0_3(gs, actor)
 
     # 保险：动作名必须在当前合法集合中
     acts = legal_actions_struct(gs)

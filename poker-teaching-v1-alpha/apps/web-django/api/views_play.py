@@ -10,8 +10,9 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from drf_spectacular.utils import extend_schema, inline_serializer
 from .models import Replay, Session
-from .state import HANDS, snapshot_state
+from .state import HANDS, snapshot_state, METRICS
 from django.shortcuts import get_object_or_404
+from . import metrics
 from poker_core.session_types import SessionView
 from poker_core.session_flow import next_hand
 
@@ -52,20 +53,42 @@ def _extract_outcome_from_events(gs) -> dict | None:
 )
 @api_view(["POST"])
 def session_start_api(request):
-    init_stack = int(request.data.get("init_stack", 200))
-    sb = int(request.data.get("sb", 1))
-    bb = int(request.data.get("bb", 2))
+    import time
+    start_time = time.time()
 
-    session_id = str(uuid.uuid4())
-    s = Session.objects.create(
-        session_id=session_id,
-        config={"init_stack": init_stack, "sb": sb, "bb": bb},
-        stacks=[init_stack, init_stack],
-        button=0,
-        hand_counter=1,
-        status="running",
-    )
-    return Response({"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config})
+    try:
+        init_stack = int(request.data.get("init_stack", 200))
+        sb = int(request.data.get("sb", 1))
+        bb = int(request.data.get("bb", 2))
+
+        session_id = str(uuid.uuid4())
+        s = Session.objects.create(
+            session_id=session_id,
+            config={"init_stack": init_stack, "sb": sb, "bb": bb},
+            stacks=[init_stack, init_stack],
+            button=0,
+            hand_counter=1,
+            status="running",
+        )
+
+        # 记录会话创建成功
+        METRICS["deals_total"] += 1  # 复用现有指标
+        metrics.inc_session_start("success")  # 使用新的监控指标
+
+        duration = time.time() - start_time
+        METRICS["last_latency_ms"] = int(duration * 1000)
+
+        return Response({"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config})
+
+    except Exception as e:
+        # 记录错误
+        METRICS["error_total"] += 1
+        metrics.inc_session_start("failed")  # 记录失败状态
+        metrics.inc_error("session_creation_failed", street="unknown")
+
+        import logging
+        logging.error(f"Session creation failed: {e}")
+        return Response({"detail": f"Session creation failed: {str(e)}"}, status=500)
 
 
 # ---------- 2) POST /hand/start ----------

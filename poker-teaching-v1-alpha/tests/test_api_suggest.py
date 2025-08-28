@@ -2,7 +2,6 @@ import json
 import pytest
 from django.test import Client
 
-
 def _post(c: Client, url: str, payload: dict):
     return c.post(url, data=json.dumps(payload), content_type="application/json")
 
