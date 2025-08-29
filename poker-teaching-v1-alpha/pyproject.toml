@@ -13,6 +13,7 @@ dependencies = [
     "djangorestframework>=3.15",
     "drf-spectacular>=0.27",
     "psycopg[binary]>=3.1",
+    "prometheus_client>=0.20",
 ]
 
 [project.optional-dependencies]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Set, Tuple
 from .cards import parse_card, get_rank_value
+from poker_core.suggest.codes import SCodes, mk_note
 
 # --- 基础特征提取 ---
 def _hole_features(cards: List[str]) -> Dict[str, Any]:
@@ -61,7 +62,7 @@ def classify_starting_hand(cards: List[str]) -> Dict[str, Any]:
     # 兼容你原有 category 口径（可逐步废弃，仅保留展示）
     if feat["pair"] and feat["high"] >= 11:
         category = "premium_pair"
-    elif (feat["suited"] and feat["is_broadway"]) or (feat["pair"] and feat["high"] >= 10):
+    elif (feat["suited"] and feat["is_broadway"] and feat["high"] >= 12) or (feat["pair"] and feat["high"] >= 10):
         category = "strong"
     elif feat["suited"] and feat["gap"] <= 1 and feat["high"] >= 10:
         category = "speculative"
@@ -89,15 +90,15 @@ def annotate_player_hand(cards: List[str]) -> Dict[str, Any]:
     info = classify_starting_hand(cards)
     notes = []
     if "weak" in info["tags"]:
-        notes.append({"code": "E001", "severity": "warn", "msg": "Weak hand: consider folding in many preflop spots."})
+        notes.append(mk_note(SCodes.AN_WEAK))
     if info["category"] == "weak_offsuit":
-        notes.append({"code": "E002", "severity": "warn", "msg": "Very weak offsuit/unconnected. Often a fold preflop."})
+        notes.append(mk_note(SCodes.AN_VERY_WEAK))
     if "suited_broadway" in info["tags"]:
-        notes.append({"code": "N101", "severity": "info", "msg": "Suited broadway: good equity/realization potential."})
+        notes.append(mk_note(SCodes.AN_SUITED_BROADWAY))
     if info["suited"] and info["gap"] <= 1 and info["low"] >= 9:
-        notes.append({"code": "N101", "severity": "info", "msg": "Suited & relatively connected. Potential for draws."})
+        notes.append(mk_note(SCodes.AN_SUITED_CONNECTED))
     if info["hand_class"] == "pair" and info["high"] >= 11:
-        notes.append({"code": "N102", "severity": "info", "msg": "Premium pair: raise or 3-bet in many spots."})
+        notes.append(mk_note(SCodes.AN_PREMIUM_PAIR))
     return {"info": info, "notes": notes}
 
 # --- 策略可调用的语义化助手（可选） ---

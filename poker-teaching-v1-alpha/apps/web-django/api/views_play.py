@@ -5,6 +5,7 @@ API 视图：游戏流程控制
 from __future__ import annotations
 import uuid
 from typing import Optional
+import time
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status, serializers
@@ -55,6 +56,10 @@ def _extract_outcome_from_events(gs) -> dict | None:
 def session_start_api(request):
     import time
     start_time = time.time()
+    t0 = time.perf_counter()
+    route = "session/start"
+    method = "POST"
+    status_label = "200"
 
     try:
         init_stack = int(request.data.get("init_stack", 200))
@@ -85,10 +90,20 @@ def session_start_api(request):
         METRICS["error_total"] += 1
         metrics.inc_session_start("failed")  # 记录失败状态
         metrics.inc_error("session_creation_failed", street="unknown")
+        status_label = "500"
+        try:
+            metrics.inc_api_error(route, "exception")
+        except Exception:
+            pass
 
         import logging
         logging.error(f"Session creation failed: {e}")
         return Response({"detail": f"Session creation failed: {str(e)}"}, status=500)
+    finally:
+        try:
+            metrics.observe_request(route, method, status_label, time.perf_counter() - t0)
+        except Exception:
+            pass
 
 
 # ---------- 2) POST /hand/start ----------
@@ -106,9 +121,16 @@ def session_start_api(request):
 )
 @api_view(["POST"])
 def hand_start_api(request):
+    t0 = time.perf_counter()
+    route = "hand/start"
+    method = "POST"
     session_id = request.data.get("session_id")
     s = get_object_or_404(Session, session_id=session_id)
     if s.status != "running":
+        try:
+            metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+        except Exception:
+            pass
         return Response({"detail": "session not running"}, status=409)
     cfg = s.config
     seed: Optional[int] = request.data.get("seed")
@@ -121,7 +143,14 @@ def hand_start_api(request):
     # 下一手按钮建议轮转（这里不直接改，交给结算后更新；先返回当前）
     st = snapshot_state(gs)
     la = list(_legal_actions(gs))
-    return Response({"hand_id": hand_id, "state": st, "legal_actions": la})
+    try:
+        resp = Response({"hand_id": hand_id, "state": st, "legal_actions": la})
+        return resp
+    finally:
+        try:
+            metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+        except Exception:
+            pass
 
 
 # ---------- 3) GET /hand/{hand_id}/state ----------
@@ -134,10 +163,23 @@ def hand_start_api(request):
 )
 @api_view(["GET"])
 def hand_state_api(request, hand_id: str):
+    t0 = time.perf_counter()
+    route = "hand/state"
+    method = "GET"
     if hand_id not in HANDS:
+        try:
+            metrics.observe_request(route, method, "404", time.perf_counter() - t0)
+        except Exception:
+            pass
         return Response({"detail": "hand not found"}, status=404)
     gs = HANDS[hand_id]["gs"]
-    return Response({"hand_id": hand_id, "state": snapshot_state(gs), "legal_actions": list(_legal_actions(gs))})
+    try:
+        return Response({"hand_id": hand_id, "state": snapshot_state(gs), "legal_actions": list(_legal_actions(gs))})
+    finally:
+        try:
+            metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+        except Exception:
+            pass
 
 
 # ---------- 4) POST /hand/{hand_id}/act ----------
@@ -167,7 +209,14 @@ OutcomeSchema = inline_serializer(
 )
 @api_view(["POST"])
 def hand_act_api(request, hand_id: str):
+    t0 = time.perf_counter()
+    route = "hand/act"
+    method = "POST"
     if hand_id not in HANDS:
+        try:
+            metrics.observe_request(route, method, "404", time.perf_counter() - t0)
+        except Exception:
+            pass
         return Response({"detail": "hand not found"}, status=404)
     gs = HANDS[hand_id]["gs"]
 
@@ -176,6 +225,11 @@ def hand_act_api(request, hand_id: str):
     try:
         gs = _apply_action(gs, action, amount)
     except ValueError as e:
+        try:
+            metrics.observe_request(route, method, "400", time.perf_counter() - t0)
+            metrics.inc_api_error(route, "validation")
+        except Exception:
+            pass
         return Response({"detail": str(e)}, status=400)
 
     # 可能推进到下一街 / 结算
@@ -288,7 +342,13 @@ def hand_act_api(request, hand_id: str):
             import logging
             logging.warning(f"Failed to save replay for {hand_id}: {e}")
 
-    return Response(payload, status=status.HTTP_200_OK)
+    try:
+        return Response(payload, status=status.HTTP_200_OK)
+    finally:
+        try:
+            metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+        except Exception:
+            pass
 
 # ---------- 5) GET /session/{session_id}/state ----------
 
@@ -309,6 +369,9 @@ SessionStateResp = inline_serializer(
 @extend_schema(responses={200: SessionStateResp})
 @api_view(["GET"])
 def session_state_api(request, session_id: str):
+    t0 = time.perf_counter()
+    route = "session/state"
+    method = "GET"
     s = get_object_or_404(Session, session_id=session_id)
     # 尝试从内存映射取当前手（教学期：最后一次启动的 hand）
     current_hand_id, latest_gs = None, None
@@ -322,7 +385,8 @@ def session_state_api(request, session_id: str):
         stacks_after_blinds = [latest_gs.players[0].stack, latest_gs.players[1].stack]
     sb = int((s.config or {}).get("sb", 1))
     bb = int((s.config or {}).get("bb", 2))
-    return Response({
+    try:
+        return Response({
         "session_id": s.session_id,
         "button": s.button,
         "stacks": s.stacks,
@@ -332,6 +396,11 @@ def session_state_api(request, session_id: str):
         "hand_counter": s.hand_counter,
         "current_hand_id": current_hand_id,
     })
+    finally:
+        try:
+            metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+        except Exception:
+            pass
 
 # ---------- 6) POST /session/next ----------
 
@@ -354,6 +423,9 @@ NextHandResp = inline_serializer(
 
 @api_view(["POST"])
 def session_next_api(request):
+    t0 = time.perf_counter()
+    route = "session/next"
+    method = "POST"
     session_id = request.data.get("session_id")
     seed = request.data.get("seed")
     s = get_object_or_404(Session, session_id=session_id)
@@ -368,6 +440,10 @@ def session_next_api(request):
             if getattr(gs, "street", None) == "complete":
                 break
     if latest_gs is None or getattr(latest_gs, "street", None) != "complete":
+        try:
+            metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+        except Exception:
+            pass
         return Response({"detail": "last hand not complete"}, status=status.HTTP_409_CONFLICT)
 
     # 配置统一兜底到 DB
@@ -405,8 +481,14 @@ def session_next_api(request):
     )
     HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "cfg": cfg_for_next}
 
-    return Response({
+    try:
+        return Response({
         "session_id": session_id,
         "hand_id": new_hid,
         "state": snapshot_state(gs_new),
     })
+    finally:
+        try:
+            metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+        except Exception:
+            pass

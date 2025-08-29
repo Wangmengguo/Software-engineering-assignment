@@ -6,10 +6,10 @@ from rest_framework import status, serializers
 from poker_core.suggest.service import build_suggestion
 from poker_core.domain.actions import legal_actions_struct
 from . import metrics  # Prometheus/StatsD 封装
-from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer, OpenApiExample
 import logging
 from .state import HANDS
-import hashlib, json, time
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,26 @@ class SuggestView(APIView):
         },
         tags=["suggest"],
         summary="Return a minimal legal suggestion for the given hand/actor",
+        examples=[
+            OpenApiExample(
+                name="Suggest Request",
+                value={"hand_id": "h_1234abcd", "actor": 0},
+                request_only=True,
+            ),
+            OpenApiExample(
+                name="Suggest Response",
+                value={
+                    "hand_id": "h_1234abcd",
+                    "actor": 0,
+                    "suggested": {"action": "bet", "amount": 125},
+                    "rationale": [
+                        {"code": "N101", "msg": "未入池：2.5bb 开局（bet）。", "data": {"bb": 50, "chosen": 125}}
+                    ],
+                    "policy": "preflop_v0",
+                },
+                response_only=True,
+            ),
+        ],
     )
     def post(self, request, *args, **kwargs):
         ser = SuggestReqSerializer(data=request.data)
@@ -77,7 +97,12 @@ class SuggestView(APIView):
                 },
             )
             try:
+                # 常规动作计数
                 metrics.inc_action(resp.get("policy"), resp.get("suggested", {}).get("action"), street=gs.street)
+                # 若发生钳制，记录细化指标（专用计数器）
+                rationale = resp.get("rationale", []) or []
+                if any((r or {}).get("code") == "W_CLAMPED" for r in rationale):
+                    metrics.inc_clamped(resp.get("policy"), resp.get("suggested", {}).get("action"), street=gs.street)
             except Exception:
                 pass
             return Response(resp, status=status.HTTP_200_OK)
@@ -89,7 +114,13 @@ class SuggestView(APIView):
             return Response({"detail": "not actor's turn"}, status=status.HTTP_409_CONFLICT)
         except ValueError as e:
             try:
-                metrics.inc_error("value_error", street=gs.street)
+                msg = str(e).lower()
+                if "illegal action" in msg:
+                    metrics.inc_error("illegal_action", street=gs.street)
+                elif "no legal actions" in msg:
+                    metrics.inc_no_legal_actions(street=gs.street)
+                else:
+                    metrics.inc_error("value_error", street=gs.street)
             except Exception:
                 pass
             return Response({"detail": f"suggest failed: {e}"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)

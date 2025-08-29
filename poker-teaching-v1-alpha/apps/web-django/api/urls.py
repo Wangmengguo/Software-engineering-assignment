@@ -10,6 +10,7 @@ from .views_play import (
     session_next_api,
 )
 from .views_suggest import SuggestView
+from . import metrics
 
 urlpatterns = [
     path("table/deal", deal_hand_api, name="deal"),
@@ -18,6 +19,7 @@ urlpatterns = [
     # New route aligned with docs: /api/v1/hand/<hand_id>/replay
     path("hand/<str:hand_id>/replay", get_replay_api, name="hand_replay"),
     path("metrics", metrics_api, name="metrics"),
+    path("metrics/prometheus", metrics.prometheus_view, name="metrics_prom"),
     path("teaching/hand/<str:hand_id>", teaching_view, name="teaching"),
     path("session/start", session_start_api, name="session_start"),
     path("hand/start", hand_start_api, name="hand_start"),

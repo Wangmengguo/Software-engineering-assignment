@@ -1,147 +1,145 @@
-# packages/poker_core/suggest/policy.py
-# 策略：preflop_v0, postflop_v0_3
+"""
+packages/poker_core/suggest/policy.py
 
+策略：preflop_v0, postflop_v0_3（纯函数版本）
+签名改造：只接收 Observation/PolicyConfig；不直接依赖 GameState/analysis/metrics。
+返回值保持原契约： (suggested: dict, rationale: list[dict], policy_name: str)
+"""
 
 from __future__ import annotations
-from typing import Dict, Any, List, Optional, Tuple
-from ..domain.actions import LegalAction, legal_actions_struct
-from ..analysis import annotate_player_hand_from_gs, in_open_range, in_call_range
+from typing import Dict, Any, List, Tuple
 
-def _clamp(target: int, lo: int, hi: int) -> int:
-    return max(lo, min(target, hi))
+from .types import Observation, PolicyConfig
+from .utils import pick_betlike_action, find_action, to_call_from_acts
+from .codes import SCodes, mk_rationale as R
 
-def _find_action(acts: List[LegalAction], name: str) -> Optional[LegalAction]:
-    return next((a for a in acts if a.action == name), None)
 
-def _to_call(acts: List[LegalAction]) -> int:
-    a = _find_action(acts, "call")
-    return int(a.to_call) if a and a.to_call is not None else 0
+# 与 analysis 中口径保持一致的范围判定（避免耦合：基于 tags/hand_class）
+OPEN_RANGE_TAGS = {"pair", "suited_broadway", "Ax_suited", "broadway_offsuit"}
+CALL_RANGE_TAGS = {"pair", "suited_broadway", "Ax_suited", "broadway_offsuit"}
 
-def policy_preflop_v0(gs, actor: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
+
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(int(v), hi))
+
+
+def _in_open_range(tags: List[str], hand_class: str) -> bool:
+    s = set(tags or [])
+    return bool(s & OPEN_RANGE_TAGS) or hand_class in ("Ax_suited", "suited_broadway", "broadway_offsuit", "pair")
+
+
+def _in_call_range(tags: List[str], hand_class: str) -> bool:
+    s = set(tags or [])
+    return bool(s & CALL_RANGE_TAGS) or hand_class in ("Ax_suited", "suited_broadway", "broadway_offsuit", "pair")
+
+
+def policy_preflop_v0(obs: Observation, cfg: PolicyConfig) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
+    """Preflop 策略 v0（纯函数）。
+
+    规则：
+    - 未面对下注：范围内以 open_size_bb*bb 开局（bet/raise），否则优先 check。
+    - 面对下注：范围内且 to_call <= call_threshold_bb*bb → call，否则 fold。
     """
-    Preflop策略v0：基于手牌强度做基础决策
-    - 未面对下注时：范围内的手牌采用2.5bb开局，否则过牌
-    - 面对下注时：范围内的手牌且代价不高则跟注，否则弃牌
+    acts = list(obs.acts or [])
+    if not acts:
+        raise ValueError("No legal actions")
 
-    返回 (suggested, rationale[], policy_name)
-    - suggested: {"action": "...", "amount"?: int}
-    - rationale: [{"code": "...", "msg": "...", "data"?: {...}}]
-    """
-    acts = legal_actions_struct(gs)
-    if not acts: raise ValueError("No legal actions")
     rationale: List[Dict[str, Any]] = []
-    bb = int(getattr(gs, "bb", 50))
-    to_call = _to_call(acts)
+    bb = int(obs.bb)
+    to_call = int(obs.to_call if obs.to_call is not None else to_call_from_acts(acts))
 
-    # 单次分类（避免重复计算）
-    try:
-        ann = annotate_player_hand_from_gs(gs, actor)
-        info = ann.get("info", {})
-        notes = ann.get("notes", [])
-        rationale.extend([n for n in notes if n.get("severity") == "info"])
-    except Exception:
-        # 分析失败时，使用保守策略
-        info = {"tags": ["unknown"], "hand_class": "unknown"}
-        rationale.append({"code": "W001", "severity": "warn", "msg": "无法分析手牌，使用保守策略。"})
-
-    # 1) 未面对下注（to_call == 0）
+    # 1) 未面对下注
     if to_call == 0:
-        if in_open_range(info):
-            target = int(round(2.5 * bb))
-            bet = _find_action(acts, "bet")
-            raise_ = _find_action(acts, "raise")
-            if bet and bet.min is not None and bet.max is not None and bet.min <= bet.max:
-                amt = _clamp(target, bet.min, bet.max)
-                rationale.append({"code": "N101", "msg": "未入池：2.5bb 开局（bet）。", "data": {"bb": bb, "chosen": amt}})
-                return ({"action": "bet", "amount": amt}, rationale, "preflop_v0")
-            if raise_ and raise_.min is not None and raise_.max is not None and raise_.min <= raise_.max:
-                amt = _clamp(target, raise_.min, raise_.max)
-                rationale.append({"code": "N102", "msg": "未入池：2.5bb 开局（raise）。", "data": {"bb": bb, "chosen": amt}})
-                return ({"action": "raise", "amount": amt}, rationale, "preflop_v0")
+        if _in_open_range(obs.tags, obs.hand_class):
+            betlike = pick_betlike_action(acts)
+            if betlike and betlike.min is not None and betlike.max is not None and betlike.min <= betlike.max:
+                target = int(round(cfg.open_size_bb * bb))
+                amt = _clamp(target, betlike.min, betlike.max)
+                code_def = SCodes.PF_OPEN_BET if betlike.action == "bet" else SCodes.PF_OPEN_RAISE
+                rationale.append(R(code_def, msg=f"未入池：{cfg.open_size_bb}bb 开局（{betlike.action}）。", data={"bb": bb, "chosen": amt, "bb_mult": cfg.open_size_bb}))
+                return ({"action": betlike.action, "amount": amt}, rationale, "preflop_v0")
         # 不在范围：优先过牌
-        if _find_action(acts, "check"):
-            rationale.append({"code": "N103", "msg": "不在开局白名单，选择过牌。"})
+        if find_action(acts, "check"):
+            rationale.append(R(SCodes.PF_CHECK_NOT_IN_RANGE))
             return ({"action": "check"}, rationale, "preflop_v0")
-        if _find_action(acts, "fold"):
-            rationale.append({"code": "N104", "msg": "无更优可行动作，保底弃牌。"})
+        if find_action(acts, "fold"):
+            rationale.append(R(SCodes.PF_FOLD_NO_BET))
             return ({"action": "fold"}, rationale, "preflop_v0")
 
-    # 2) 面对下注（to_call > 0）
-    threshold = 3 * bb
-    if in_call_range(info) and _find_action(acts, "call") and to_call <= threshold:
-        rationale.append({"code": "N201", "msg": "面对下注：范围内且代价不高（<=3bb），选择跟注。", "data": {"to_call": to_call, "threshold": threshold}})
+    # 2) 面对下注
+    threshold = int(cfg.call_threshold_bb * bb)
+    if _in_call_range(obs.tags, obs.hand_class) and find_action(acts, "call") and to_call <= threshold:
+        rationale.append(R(SCodes.PF_CALL_THRESHOLD, data={"to_call": to_call, "threshold": threshold}))
         return ({"action": "call"}, rationale, "preflop_v0")
 
-    if _find_action(acts, "fold"):
-        rationale.append({"code": "N202", "msg": "面对下注：范围外或代价过高，弃牌。", "data": {"to_call": to_call, "threshold": threshold}})
+    if find_action(acts, "fold"):
+        rationale.append(R(SCodes.PF_FOLD_EXPENSIVE, data={"to_call": to_call, "threshold": threshold}))
         return ({"action": "fold"}, rationale, "preflop_v0")
 
-    if _find_action(acts, "check"):
-        rationale.append({"code": "E001", "msg": "异常局面：回退为过牌。"})
+    if find_action(acts, "check"):
+        rationale.append(R(SCodes.SAFE_CHECK))
         return ({"action": "check"}, rationale, "preflop_v0")
 
     raise ValueError("No safe suggestion")
 
-# --- postflop_v0_3 ---
 
-def policy_postflop_v0_3(gs, actor: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
-    acts = legal_actions_struct(gs)
+def policy_postflop_v0_3(obs: Observation, cfg: PolicyConfig) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
+    """Postflop 策略 v0.3（纯函数）。
+
+    - 无人下注线：flop 用最小试探注；turn/river 仅在具备一定摊牌价值（pair/Ax_suited）下注。
+    - 面对下注线：按 pot-odds 与阈值决定 call 或 fold；范围内手牌使用更宽松阈值。
+    """
+    acts = list(obs.acts or [])
     if not acts:
         raise ValueError("No legal actions")
 
-    street = getattr(gs, "street", "flop")
-    bb = int(getattr(gs, "bb", 50))
-    pot = int(getattr(gs, "pot", 0))
-
-    ann = annotate_player_hand_from_gs(gs, actor)
-    info = ann.get("info", {})
-
     rationale: List[Dict[str, Any]] = [
-        {"code": "P300", "msg": "Postflop v0.3：hand tags + 赔率阈值 + 最小下注。", "data": {"street": street, "tags": info.get("tags")}}
+        R(SCodes.PL_HEADER, data={"street": obs.street, "tags": list(obs.tags or [])}),
     ]
 
-    to_call = _to_call(acts)
+    to_call = int(obs.to_call if obs.to_call is not None else to_call_from_acts(acts))
+    pot = int(obs.pot)
 
-    # 无人下注线：在 flop 优先用最小下注做试探（若有 bet/raise），turn/river 仍保守
+    # 无人下注线
     if to_call == 0:
-        bet = _find_action(acts, "bet") or _find_action(acts, "raise")
-        if bet and bet.min is not None and bet.max is not None and bet.min <= bet.max:
-            # 简规则：flop 上直接用最小下注；turn/river 仅当有一定摊牌价值（pair 或 Ax_suited）再下注
-            if street == "flop" or (street in {"turn", "river"} and ("pair" in info.get("tags", []) or info.get("hand_class") == "Ax_suited")):
-                amt = int(bet.min)
-                rationale.append({"code": "P301", "msg": f"{street} 无人下注线：以最小尺寸试探性下注。", "data": {"chosen": amt}})
-                return ({"action": bet.action, "amount": amt}, rationale, "postflop_v0_3")
-        if _find_action(acts, "check"):
-            rationale.append({"code": "P302", "msg": "无法或不宜下注，选择过牌。"})
+        betlike = pick_betlike_action(acts)
+        if betlike and betlike.min is not None and betlike.max is not None and betlike.min <= betlike.max:
+            allow_bet = (obs.street == "flop") or (obs.street in {"turn", "river"} and ("pair" in (obs.tags or []) or obs.hand_class == "Ax_suited"))
+            if allow_bet:
+                amt = int(betlike.min)
+                rationale.append(R(SCodes.PL_PROBE_BET, msg=f"{obs.street} 无人下注线：以最小尺寸试探性下注。", data={"chosen": amt}))
+                return ({"action": betlike.action, "amount": amt}, rationale, "postflop_v0_3")
+        if find_action(acts, "check"):
+            rationale.append(R(SCodes.PL_CHECK))
             return ({"action": "check"}, rationale, "postflop_v0_3")
 
-    # 面对下注：按赔率阈值决定跟注或弃牌；范围内手牌放宽阈值
-    # pot_odds = to_call / (pot + to_call)
+    # 面对下注线：赔率判断
     denom = pot + to_call
     pot_odds = (to_call / denom) if denom > 0 else 1.0
-    base_threshold = 0.33
-    if in_call_range(info):
-        threshold = 0.40  # 范围内更愿意跟注
-    else:
-        threshold = base_threshold
+    threshold = cfg.pot_odds_threshold_callrange if _in_call_range(obs.tags, obs.hand_class) else cfg.pot_odds_threshold
 
-    call = _find_action(acts, "call")
-    if call and pot_odds <= threshold:
-        rationale.append({"code": "P311", "msg": "赔率可接受，选择跟注。", "data": {"to_call": to_call, "pot": pot, "pot_odds": round(pot_odds, 4), "threshold": threshold}})
+    if find_action(acts, "call") and pot_odds <= threshold:
+        rationale.append(R(SCodes.PL_CALL_POTODDS, data={"to_call": to_call, "pot": pot, "pot_odds": round(pot_odds, 4), "threshold": threshold}))
         return ({"action": "call"}, rationale, "postflop_v0_3")
 
-    if _find_action(acts, "fold"):
-        rationale.append({"code": "P312", "msg": "赔率不利，弃牌。", "data": {"to_call": to_call, "pot": pot, "pot_odds": round(pot_odds, 4), "threshold": threshold}})
+    if find_action(acts, "fold"):
+        rationale.append(R(SCodes.PL_FOLD_POTODDS, data={"to_call": to_call, "pot": pot, "pot_odds": round(pot_odds, 4), "threshold": threshold}))
         return ({"action": "fold"}, rationale, "postflop_v0_3")
 
-    # 兜底：仅当只剩 allin
-    allin = _find_action(acts, "allin")
+    # 兜底
+    allin = find_action(acts, "allin")
     if allin:
-        rationale.append({"code": "P399", "msg": "仅剩全下可选。"})
+        rationale.append(R(SCodes.PL_ALLIN_ONLY))
         return ({"action": "allin", "amount": allin.max or allin.min}, rationale, "postflop_v0_3")
 
-    if _find_action(acts, "check"):
-        rationale.append({"code": "E002", "msg": "异常局面：回退为过牌。"})
+    if find_action(acts, "check"):
+        rationale.append(R(SCodes.SAFE_CHECK))
         return ({"action": "check"}, rationale, "postflop_v0_3")
 
     raise ValueError("No safe postflop suggestion")
+
+
+__all__ = [
+    "policy_preflop_v0",
+    "policy_postflop_v0_3",
+]
