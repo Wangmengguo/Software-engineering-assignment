@@ -8,6 +8,7 @@ from .views_play import (
     hand_act_api,
     session_state_api,
     session_next_api,
+    hand_auto_step_api,
 )
 from .views_suggest import SuggestView
 from . import metrics
@@ -25,6 +26,7 @@ urlpatterns = [
     path("hand/start", hand_start_api, name="hand_start"),
     path("hand/state/<str:hand_id>", hand_state_api, name="hand_state"),
     path("hand/act/<str:hand_id>", hand_act_api, name="hand_act"),
+    path("hand/auto-step/<str:hand_id>", hand_auto_step_api, name="hand_auto_step"),
     path("session/<str:session_id>/state", session_state_api, name="session_state"),
     path("session/next", session_next_api, name="session_next"),
     path("suggest", SuggestView.as_view(), name="suggest"),

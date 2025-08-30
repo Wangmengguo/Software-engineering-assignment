@@ -117,5 +117,5 @@ def in_call_range(info: Dict[str, Any]) -> bool:
 def annotate_player_hand_from_gs(gs, actor: int) -> Dict[str, Any]:
     hole = list(getattr(gs.players[actor], "hole", []) or [])
     if len(hole) != 2:
-        return {"info": {"tags": ["unknown"], "hand_class": "unknown"}, "notes": [{"code": "E000", "severity": "warn", "msg": "No hole cards available."}]}
+        return {"info": {"tags": ["unknown"], "hand_class": "unknown"}, "notes": [mk_note(SCodes.WARN_ANALYSIS_MISSING)]}
     return annotate_player_hand(hole)

@@ -43,8 +43,9 @@ POLICY_REGISTRY: Dict[str, PolicyFn] = {
 }
 
 
-def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Observation:
+def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Tuple[Observation, List[Dict[str, Any]]]:
     # 从 analysis 取 tags/hand_class（失败时降级 unknown）
+    pre_rationale: List[Dict[str, Any]] = []
     try:
         ann = annotate_player_hand_from_gs(gs, actor)
         info = ann.get("info", {})
@@ -52,6 +53,7 @@ def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Observation:
         hand_class = info.get("hand_class", "unknown")
     except Exception:
         tags, hand_class = ["unknown"], "unknown"
+        pre_rationale.append(R(SCodes.WARN_ANALYSIS_MISSING))
 
     hand_id = str(getattr(gs, "hand_id", ""))
     street = str(getattr(gs, "street", "preflop"))
@@ -59,7 +61,7 @@ def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Observation:
     pot = int(getattr(gs, "pot", 0))
     to_call = int(to_call_from_acts(acts))
 
-    return Observation(
+    obs = Observation(
         hand_id=hand_id,
         actor=int(actor),
         street=street,
@@ -70,6 +72,7 @@ def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Observation:
         tags=tags,
         hand_class=str(hand_class),
     )
+    return obs, pre_rationale
 
 
 def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict[str, Any]:
@@ -90,7 +93,7 @@ def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict
         raise ValueError("No legal actions")
 
     # 组装 Observation
-    obs = _build_observation(gs, actor, acts)
+    obs, pre_rationale = _build_observation(gs, actor, acts)
 
     # 选择策略
     policy_fn = POLICY_REGISTRY.get(obs.street)
@@ -100,6 +103,9 @@ def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict
     # 执行策略
     cfg = cfg or PolicyConfig()
     suggested, rationale, policy_name = policy_fn(obs, cfg)
+    # 注入预先的告警（例如分析缺失）
+    if pre_rationale:
+        rationale = list(pre_rationale) + list(rationale or [])
 
     # 名称校验
     names = {a.action for a in acts}

@@ -16,6 +16,8 @@ from django.shortcuts import get_object_or_404
 from . import metrics
 from poker_core.session_types import SessionView
 from poker_core.session_flow import next_hand
+from poker_core.suggest.service import build_suggestion
+from poker_core.analysis import annotate_player_hand
 
 # 领域函数（按你项目的实际导入路径调整）
 from poker_core.state_hu import (
@@ -36,7 +38,101 @@ def _extract_outcome_from_events(gs) -> dict | None:
     for e in reversed(getattr(gs, "events", []) or []):
         if e.get("t") == "win_fold":
             return {"winner": e.get("who"), "best5": None}
+        if e.get("t") == "win_showdown":
+            return {"winner": e.get("who"), "best5": None}
     return None
+
+# 统一的回放持久化（手牌结束时调用）
+def _persist_replay(hand_id: str, gs) -> None:
+    try:
+        session_id = HANDS.get(hand_id, {}).get("session_id")
+        seed = HANDS.get(hand_id, {}).get("seed")
+        # 统一的replay数据结构
+        from datetime import datetime, timezone
+        from poker_core.version import ENGINE_COMMIT, SCHEMA_VERSION
+
+        outcome = _extract_outcome_from_events(gs)
+
+        # 获取玩家数据和注释
+        players_data = []
+        annotations_data = []
+        if hasattr(gs, 'players'):
+            for i, player in enumerate(gs.players):
+                player_info = {
+                    "pos": i,
+                    "hole": player.hole,
+                    "stack": player.stack,
+                    "invested": player.invested_street,
+                    "folded": player.folded,
+                    "all_in": player.all_in,
+                }
+                players_data.append(player_info)
+
+                # 生成教学注释
+                if player.hole and len(player.hole) == 2:
+                    annotation = annotate_player_hand(player.hole)
+                    annotations_data.append(annotation)
+                else:
+                    annotations_data.append({"info": {}, "notes": []})
+
+        # 生成基础的steps数据
+        steps_data = []
+        if hasattr(gs, 'events') and gs.events:
+            # 游戏开始步骤
+            steps_data.append({
+                "idx": 0,
+                "evt": "GAME_START",
+                "payload": {
+                    "session_id": session_id,
+                    "seed": seed,
+                    "players": len(players_data)
+                }
+            })
+
+            # 从events生成steps (选取关键事件)
+            key_events = ["deal_hole", "showdown", "win_fold", "win_showdown"]
+            for event in gs.events:
+                if event.get("t") in key_events:
+                    steps_data.append({
+                        "idx": len(steps_data),
+                        "evt": event.get("t", "").upper(),
+                        "payload": {k: v for k, v in event.items() if k != "t"}
+                    })
+
+            # 游戏结束步骤
+            if outcome:
+                steps_data.append({
+                    "idx": len(steps_data),
+                    "evt": "GAME_END",
+                    "payload": outcome
+                })
+
+        replay_data = {
+            # 基本信息
+            "hand_id": hand_id,
+            "session_id": session_id,
+            "seed": seed,
+
+            # 游戏数据
+            "events": getattr(gs, "events", []),
+            "board": list(getattr(gs, "board", [])),
+            "winner": outcome.get("winner") if outcome else None,
+            "best5": outcome.get("best5") if outcome else None,
+
+            # 教学数据
+            "players": players_data,
+            "annotations": annotations_data,
+            "steps": steps_data,
+
+            # 元数据
+            "engine_commit": ENGINE_COMMIT,
+            "schema_version": SCHEMA_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        Replay.objects.update_or_create(hand_id=hand_id, defaults={"payload": replay_data})
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to save replay for {hand_id}: {e}")
 
 # ---------- 1) POST /session/start ----------
 @extend_schema(
@@ -248,99 +344,12 @@ def hand_act_api(request, hand_id: str):
     }
 
     if hand_over:
+        # API 直带最小结果（便于前端立即展示）
         outcome = _extract_outcome_from_events(gs)
         if outcome:
-            payload["outcome"] = outcome  # ← API 直带最小结果
-        
-        # ← 最小回放入库：含 winner/best5
-        try:
-            session_id = HANDS[hand_id]["session_id"]
-            seed = HANDS[hand_id]["seed"]
-            # 统一的replay数据结构
-            from datetime import datetime, timezone
-            from poker_core.version import ENGINE_COMMIT, SCHEMA_VERSION
-            from poker_core.analysis import annotate_player_hand
-            
-            # 获取玩家数据和注释
-            players_data = []
-            annotations_data = []
-            if hasattr(gs, 'players'):
-                for i, player in enumerate(gs.players):
-                    player_info = {
-                        "pos": i,
-                        "hole": player.hole,
-                        "stack": player.stack,
-                        "invested": player.invested_street,
-                        "folded": player.folded,
-                        "all_in": player.all_in,
-                    }
-                    players_data.append(player_info)
-                    
-                    # 生成教学注释
-                    if player.hole and len(player.hole) == 2:
-                        annotation = annotate_player_hand(player.hole)
-                        annotations_data.append(annotation)
-                    else:
-                        annotations_data.append({"info": {}, "notes": []})
-            
-            # 生成基础的steps数据
-            steps_data = []
-            if hasattr(gs, 'events') and gs.events:
-                # 游戏开始步骤
-                steps_data.append({
-                    "idx": 0,
-                    "evt": "GAME_START",
-                    "payload": {
-                        "session_id": session_id,
-                        "seed": seed,
-                        "players": len(players_data)
-                    }
-                })
-                
-                # 从events生成steps (选取关键事件)
-                key_events = ["deal_hole", "showdown", "win_fold", "win_showdown"]
-                for i, event in enumerate(gs.events):
-                    if event.get("t") in key_events:
-                        steps_data.append({
-                            "idx": len(steps_data),
-                            "evt": event.get("t", "").upper(),
-                            "payload": {k: v for k, v in event.items() if k != "t"}
-                        })
-                
-                # 游戏结束步骤
-                if outcome:
-                    steps_data.append({
-                        "idx": len(steps_data),
-                        "evt": "GAME_END",
-                        "payload": outcome
-                    })
-            
-            replay_data = {
-                # 基本信息
-                "hand_id": hand_id,
-                "session_id": session_id,
-                "seed": seed,
-                
-                # 游戏数据
-                "events": getattr(gs, "events", []),
-                "board": list(getattr(gs, "board", [])),
-                "winner": outcome.get("winner") if outcome else None,
-                "best5": outcome.get("best5") if outcome else None,
-                
-                # 教学数据
-                "players": players_data,
-                "annotations": annotations_data,
-                "steps": steps_data,  # 生成的基础steps数据
-                
-                # 元数据
-                "engine_commit": ENGINE_COMMIT,
-                "schema_version": SCHEMA_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            Replay.objects.update_or_create(hand_id=hand_id, defaults={"payload": replay_data})
-        except Exception as e:
-            import logging
-            logging.warning(f"Failed to save replay for {hand_id}: {e}")
+            payload["outcome"] = outcome
+        # 同步持久化回放
+        _persist_replay(hand_id, gs)
 
     try:
         return Response(payload, status=status.HTTP_200_OK)
@@ -479,7 +488,7 @@ def session_next_api(request):
         cfg_for_next, session_id=session_id, hand_id=new_hid,
         button=plan.next_button, stacks=plan.stacks, seed=plan.seed
     )
-    HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "cfg": cfg_for_next}
+    HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
 
     try:
         return Response({
@@ -492,3 +501,102 @@ def session_next_api(request):
             metrics.observe_request(route, method, "200", time.perf_counter() - t0)
         except Exception:
             pass
+# ---------- 7) POST /hand/auto-step/{hand_id} ----------
+
+AutoStepReq = inline_serializer(
+    name="AutoStepReq",
+    fields={
+        "user_actor": serializers.IntegerField(required=False, min_value=0, max_value=1, default=0),
+        "max_steps": serializers.IntegerField(required=False, min_value=1, max_value=50, default=10),
+    }
+)
+
+AutoStepResp = inline_serializer(
+    name="AutoStepResp",
+    fields={
+        "hand_id": serializers.CharField(),
+        "steps": serializers.ListField(child=serializers.JSONField()),
+        "state": serializers.JSONField(),
+        "hand_over": serializers.BooleanField(),
+        "legal_actions": serializers.ListField(child=serializers.CharField()),
+    }
+)
+
+@extend_schema(request=AutoStepReq, responses={200: AutoStepResp})
+@api_view(["POST"])
+def hand_auto_step_api(request, hand_id: str):
+    t0 = time.perf_counter()
+    route = "hand/auto-step"
+    method = "POST"
+    if hand_id not in HANDS:
+        try:
+            metrics.observe_request(route, method, "404", time.perf_counter() - t0)
+        except Exception:
+            pass
+        return Response({"detail": "hand not found"}, status=404)
+
+    user_actor = int(request.data.get("user_actor", 0))
+    max_steps = int(request.data.get("max_steps", 10))
+
+    entry = HANDS[hand_id]
+    gs = entry["gs"]
+    steps: list[dict] = []
+
+    # 若手牌已结束，直接返回
+    if getattr(gs, "street", None) == "complete":
+        try:
+            metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+        except Exception:
+            pass
+        return Response({
+            "hand_id": hand_id,
+            "steps": steps,
+            "state": snapshot_state(gs),
+            "hand_over": True,
+            "legal_actions": [],
+        }, status=409)
+
+    # 自动步进：为对手执行建议动作，直到轮到用户或结束
+    while max_steps > 0:
+        cur = getattr(gs, "to_act", None)
+        if cur is None or cur == user_actor:
+            break
+        # 调用建议
+        resp = build_suggestion(gs, cur)
+        sug = resp.get("suggested", {})
+        act_name = sug.get("action")
+        amt = sug.get("amount", None)
+        # 应用动作
+        gs = _apply_action(gs, act_name, amt)
+        gs = _settle_if_needed(gs)
+        entry["gs"] = gs
+        steps.append({
+            "actor": cur,
+            "suggested": sug,
+            "rationale": resp.get("rationale", []),
+            "policy": resp.get("policy"),
+        })
+        max_steps -= 1
+        if getattr(gs, "street", None) == "complete":
+            break
+
+    hand_over = getattr(gs, "street", None) == "complete"
+    payload = {
+        "hand_id": hand_id,
+        "steps": steps,
+        "state": snapshot_state(gs),
+        "hand_over": hand_over,
+        "legal_actions": list(_legal_actions(gs)) if not hand_over else [],
+    }
+
+    if hand_over:
+        outcome = _extract_outcome_from_events(gs)
+        if outcome:
+            payload["outcome"] = outcome
+        _persist_replay(hand_id, gs)
+
+    try:
+        metrics.observe_request(route, method, "200", time.perf_counter() - t0)
+    except Exception:
+        pass
+    return Response(payload)
