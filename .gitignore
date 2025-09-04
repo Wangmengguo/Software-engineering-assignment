@@ -63,3 +63,6 @@ site/
 # Temporary files
 *.tmp
 *.temp
+
+# External dependencies
+pokerkit-main/

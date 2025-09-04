@@ -212,9 +212,12 @@ def _maybe_advance_street(gs: GameState) -> GameState:
         # 进入新街时，回合状态清零
         return replace(new_gs, open_bet=False, checks_in_round=0)
     
-    # 优先处理：双方 all-in 且已对齐 → 自动一路推进到摊牌
+    # 优先处理：任意一方 all-in 且已对齐 → 自动一路推进到摊牌
+    # 说明：若仅一方 all-in，另一方仍有余筹，但由于对手已 all-in，
+    #       根据 HU 规则对手无法再进行新一轮下注/加注；因此在对齐后
+    #       应自动发完余下公共牌直至摊牌，避免“无人可行动”卡住。
     p0, p1 = gs.players
-    if p0.all_in and p1.all_in and _both_satisfied(gs):
+    if (p0.all_in or p1.all_in) and _both_satisfied(gs):
         cur = gs
         # 连续推进直至摊牌
         while True:

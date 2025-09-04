@@ -2,5 +2,5 @@
 - OpenAPI v1
 - Domain core
 - CI baseline
-- Minimal demo + teaching view
+- Minimal demo
 - ADR-001/002 included

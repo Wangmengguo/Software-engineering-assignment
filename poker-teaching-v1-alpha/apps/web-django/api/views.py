@@ -98,12 +98,4 @@ def get_replay(request, hand_id: str):
 def metrics(request):
     return JsonResponse(METRICS)
 
-def teaching_view(request, hand_id: str):
-    rep = REPLAYS.get(hand_id) or None
-    if rep is None:
-        try:
-            obj = Replay.objects.get(hand_id=hand_id)
-            rep = obj.payload
-        except Replay.DoesNotExist:
-            return HttpResponseNotFound(JsonResponse({"error": "not found"}).content)
-    return render(request, "teaching.html", {"rep": rep})
+

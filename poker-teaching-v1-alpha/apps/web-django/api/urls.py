@@ -1,6 +1,6 @@
 from django.urls import path
 from .views_api import deal_hand_api, get_replay_api, metrics_api
-from .views import teaching_view
+
 from .views_play import (
     session_start_api,
     hand_start_api,
@@ -11,6 +11,7 @@ from .views_play import (
     hand_auto_step_api,
 )
 from .views_suggest import SuggestView
+from .views_ui import ui_hand_act, ui_session_next, ui_coach_suggest, ui_game_view, ui_start
 from . import metrics
 
 urlpatterns = [
@@ -21,7 +22,7 @@ urlpatterns = [
     path("hand/<str:hand_id>/replay", get_replay_api, name="hand_replay"),
     path("metrics", metrics_api, name="metrics"),
     path("metrics/prometheus", metrics.prometheus_view, name="metrics_prom"),
-    path("teaching/hand/<str:hand_id>", teaching_view, name="teaching"),
+
     path("session/start", session_start_api, name="session_start"),
     path("hand/start", hand_start_api, name="hand_start"),
     path("hand/state/<str:hand_id>", hand_state_api, name="hand_state"),
@@ -30,4 +31,10 @@ urlpatterns = [
     path("session/<str:session_id>/state", session_state_api, name="session_state"),
     path("session/next", session_next_api, name="session_next"),
     path("suggest", SuggestView.as_view(), name="suggest"),
+    # UI glue (HTML, OOB fragments)
+    path("ui/game/<str:session_id>/<str:hand_id>", ui_game_view, name="ui_game"),
+    path("ui/start", ui_start, name="ui_start"),
+    path("ui/hand/<str:hand_id>/act", ui_hand_act, name="ui_hand_act"),
+    path("ui/session/<str:session_id>/next", ui_session_next, name="ui_session_next"),
+    path("ui/coach/<str:hand_id>/suggest", ui_coach_suggest, name="ui_coach_suggest"),
 ]

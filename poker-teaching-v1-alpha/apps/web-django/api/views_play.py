@@ -577,7 +577,9 @@ def hand_auto_step_api(request, hand_id: str):
             "policy": resp.get("policy"),
         })
         max_steps -= 1
-        if getattr(gs, "street", None) == "complete":
+        # 重新检查to_act，因为_apply_action和_settle_if_needed可能改变了行动者
+        cur = getattr(gs, "to_act", None)
+        if cur is None or cur == user_actor or getattr(gs, "street", None) == "complete":
             break
 
     hand_over = getattr(gs, "street", None) == "complete"

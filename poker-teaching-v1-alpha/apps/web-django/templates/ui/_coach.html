@@ -1,0 +1,19 @@
+{% comment %} Coach suggest content (OOB) {% endcomment %}
+<div id="coach-panel" hx-swap-oob="innerHTML" class="space-y-2 text-sm">
+  {% if suggest %}
+    <div><span class="stat-label">Suggestion</span></div>
+    <div>
+      <span class="chip">{{ suggest.suggested.action|upper }}</span>
+      {% if suggest.suggested.amount %}<span class="chip">{{ suggest.suggested.amount }}</span>{% endif %}
+    </div>
+    {% if suggest.rationale %}
+      <ul class="list-disc pl-5 text-[rgb(var(--muted))]">
+        {% for r in suggest.rationale %}
+          <li><span class="text-[rgb(var(--text))] font-medium">{{ r.code }}</span> — {{ r.msg }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% else %}
+    <div class="text-[rgb(var(--muted))]">No suggestion</div>
+  {% endif %}
+</div>

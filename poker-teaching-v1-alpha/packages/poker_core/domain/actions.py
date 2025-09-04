@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Literal, Optional
+import copy
 
 # 引擎自由函数接口
 from poker_core.state_hu import (
@@ -30,10 +31,12 @@ def to_act_index(gs) -> int:
 def _simulate_apply(gs, action: ActionName, amount: Optional[int] = None) -> bool:
     """在原始 gs 上尝试执行动作（引擎为纯函数返回新状态，输入不变）。"""
     try:
+        # 深拷贝以避免修改原始状态（特别是 events 列表）
+        gs_copy = copy.deepcopy(gs)
         if amount is None:
-            core_apply_action(gs, action)
+            core_apply_action(gs_copy, action)
         else:
-            core_apply_action(gs, action, amount)
+            core_apply_action(gs_copy, action, amount)
         return True
     except Exception:
         return False

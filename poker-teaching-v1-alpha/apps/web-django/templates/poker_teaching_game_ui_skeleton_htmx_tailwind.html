@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Poker Teaching — Game UI</title>
+
+    <!-- Tailwind CDN (MVP 方便接入；生产建议本地构建) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            boxShadow: {
+              elevated:
+                "0 4px 16px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04)",
+            },
+          },
+        },
+      };
+    </script>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org/dist/ext/json-enc.js"></script>
+
+    <!-- Design tokens: functional minimalism (avoid green) -->
+    <style>
+      :root {
+        /* Base tokens (RGB, 0-255) */
+        --bg: 248 249 251;
+        --surface: 255 255 255;
+        --text: 17 24 39;
+        --muted: 113 113 122;
+        --border: 228 228 231;
+        --ring: 226 232 240;
+
+        /* Brand/action color (unified action bar) */
+        --brand-500: 99 102 241; /* indigo-500 */
+        --brand-600: 79 70 229; /* indigo-600 */
+        --brand-700: 67 56 202; /* indigo-700 */
+        --action: var(--brand-600);
+
+        /* Feedback colors */
+        --info: 59 130 246; /* blue-500 */
+        --warn: 245 158 11; /* amber-500 */
+        --danger: 239 68 68; /* red-500 */
+      }
+
+      [data-theme="dark"] {
+        --bg: 17 17 19;
+        --surface: 24 24 27;
+        --text: 244 244 245;
+        --muted: 161 161 170;
+        --border: 63 63 70;
+        --ring: 63 63 70;
+        --brand-500: 129 140 248;
+        --brand-600: 99 102 241;
+        --brand-700: 79 70 229;
+        --action: var(--brand-600);
+        --info: 96 165 250;
+        --warn: 245 158 11;
+        --danger: 248 113 113;
+      }
+    </style>
+
+    <!-- Atomic components (for reuse) -->
+    <style type="text/tailwindcss">
+      @layer components {
+        .card {@apply bg-[rgb(var(--surface))] border border-[rgb(var(--border))] rounded-2xl shadow-sm;} 
+        .btn {@apply inline-flex items-center justify-center gap-2 rounded-xl h-11 px-4 font-medium transition active:scale-[.98] select-none disabled:opacity-50 disabled:cursor-not-allowed;}
+        .btn-primary {@apply text-white shadow; background-color: rgb(var(--action));}
+        .btn-primary:hover {filter: brightness(0.95);}
+        .btn-ghost {@apply border border-[rgb(var(--border))] bg-transparent text-[rgb(var(--text))];}
+        .stat-label {@apply text-xs uppercase tracking-wide text-[rgb(var(--muted))];}
+        .stat-value {@apply text-sm font-semibold text-[rgb(var(--text))];}
+        .chip {@apply text-xs font-semibold px-2.5 py-1 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface))];}
+        .kbd {@apply text-[10px] px-1.5 py-0.5 rounded border border-[rgb(var(--border))] text-[rgb(var(--muted))];}
+        .divider {@apply h-px bg-[rgb(var(--border))];}
+      }
+    </style>
+  </head>
+
+  <body class="min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))] antialiased">
+    <!-- Layout: table left + coach right -->
+    <div class="layout-root mx-auto px-4 lg:px-6 grid gap-6 min-h-screen pb-safe" style="max-width: 900px;">
+      <!-- Top HUD (sticky) -->
+      <header
+        class="sticky top-0 z-40 -mx-4 lg:-mx-6 px-4 lg:px-6 py-3 bg-[rgb(var(--bg))]/80 backdrop-blur border-b border-[rgb(var(--border))]"
+        aria-label="Session HUD"
+      >
+        <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+          <div class="flex items-center gap-4">
+            <div id="hud-root" class="text-sm">
+              <div class="stat-label">Blinds</div>
+              <div class="stat-value" id="hud-blinds">SB {{hud.sb}} / BB {{hud.bb}}</div>
+            </div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm">
+              <div class="stat-label">Pot</div>
+              <div class="stat-value" id="hud-pot">{{hud.pot}}</div>
+            </div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm">
+              <div class="stat-label">Hand</div>
+              <div class="stat-value" id="hud-hand">#{{hud.hand_no}}</div>
+            </div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm">
+              <div class="stat-label">TO ACT</div>
+              <div class="stat-value" id="hud-actor">{{hud.next_role}}</div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <div id="global-error" class="hidden"></div>
+            <div id="status-chip" class="chip hidden"></div>
+            <button class="btn btn-ghost" id="btn-theme-toggle" title="Toggle Theme">
+              <!-- Light mode icon (moon) - shown when in light mode -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-moon opacity-70">
+                <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+                <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+              </svg>
+              <!-- Dark mode icon (sun) - shown when in dark mode -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sun opacity-70 hidden">
+                <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div id="aria-next" aria-live="polite" class="sr-only">Next to act: {{hud.next_role}}</div>
+
+      <!-- Table area: simplified table layout -->
+      <main class="space-y-4" aria-label="Game Table">
+        <section class="card p-4 relative aspect-[16/10] overflow-hidden shadow-elevated" id="table-card">
+          <!-- Pot & community cards (center layer) -->
+          <div class="absolute inset-0 grid place-items-center pointer-events-none">
+            {% include "ui/_board.html" with st=st %}
+          </div>
+
+          {% include "ui/_seats.html" with st=st %}
+
+          <!-- Action Log (bottom-right) -->
+          <div class="absolute right-3 bottom-3 w-48 card p-3 text-sm action-log-card">
+            <div class="stat-label">Action Log</div>
+            {% include "ui/_log.html" with log=log %}
+          </div>
+        </section>
+      </main>
+
+      <!-- Right: Coach panel -->
+      <aside class="sticky top-[64px] self-start">
+        <details class="card overflow-hidden" open>
+          <summary class="list-none select-none cursor-pointer">
+            <div class="flex items-center justify-between gap-3 p-4">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-[rgb(var(--info))]"></div>
+                <div class="font-semibold">Coach</div>
+              </div>
+              <span class="text-xs text-[rgb(var(--muted))]">Expand details if needed</span>
+            </div>
+          </summary>
+          <div class="divider"></div>
+          <div class="p-4 space-y-3" id="coach-panel">
+            <div class="text-sm text-[rgb(var(--muted))]">Click “Get Suggestion” below</div>
+          </div>
+          <div class="px-4 pb-4" id="coach-trigger">
+            <button class="btn btn-ghost w-full" 
+                    hx-post="/api/v1/ui/coach/{{hand_id}}/suggest" 
+                    hx-vals='{"actor":0}'
+                    hx-headers='{"X-CSRFToken":"{{ csrf_token|escapejs }}"}'
+                    hx-swap="none">Get Suggestion</button>
+          </div>
+        </details>
+
+        <div class="mt-4 card p-4">
+          <div class="stat-label">Shortcuts</div>
+          <div class="mt-2 grid grid-cols-5 gap-1 text-sm">
+            <div class="flex items-center gap-1"><span class="kbd">F</span>Fold</div>
+            <div class="flex items-center gap-1"><span class="kbd">C</span>Call/Check</div>
+            <div class="flex items-center gap-1"><span class="kbd">B</span>Bet</div>
+            <div class="flex items-center gap-1"><span class="kbd">R</span>Raise</div>
+            <div class="flex items-center gap-1"><span class="kbd">A</span>All-in</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Fixed action bar -->
+    <footer
+      class="fixed bottom-0 inset-x-0 z-50 bg-[rgb(var(--surface))]/90 backdrop-blur border-t border-[rgb(var(--border))]"
+      aria-label="Action Bar"
+    >
+      <div class="mx-auto px-4 lg:px-6 py-3 flex items-center justify-between" style="max-width: 900px;">
+        <!-- legal_actions comes from server; no client inference -->
+        <form id="action-form" class="flex items-center gap-2"
+              hx-post="/api/v1/ui/hand/{{hand_id}}/act"
+              hx-swap="none"
+              hx-indicator="#act-indicator"
+              hx-include="#amount-wrap"
+        >
+          {% csrf_token %}
+          {% include "ui/_actions.html" with actions=actions ended=False only %}
+
+          <!-- Amount input (server-controlled visibility/range) -->
+          {% include "ui/_amount.html" with amount=actions.amount only %}
+
+          <div id="act-indicator" class="htmx-indicator text-xs text-[rgb(var(--muted))] ml-2">Sending…</div>
+        </form>
+      </div>
+    </footer>
+
+    <!-- Optional: keyboard shortcuts (tiny inline script) -->
+    <script>
+      // Map F/C/B/R/A to actions; server also validates
+      addEventListener("keydown", (e) => {
+        if (e.target && ["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
+        const form = document.getElementById("action-form");
+        if (!form) return;
+        const map = {
+          KeyF: "fold",
+          KeyC: null, // C prefers Call, falls back to Check
+          KeyR: "raise",
+          KeyB: "bet",
+          KeyA: "allin",
+        };
+        if (!(e.code in map)) return;
+        e.preventDefault();
+        if (e.code === "KeyC") {
+          const callBtn = form.querySelector('button[name=action][value="call"]');
+          const checkBtn = form.querySelector('button[name=action][value="check"]');
+          const btn = (callBtn && !callBtn.disabled) ? callBtn : checkBtn;
+          btn?.click();
+          return;
+        }
+        const action = map[e.code];
+        const btn = form.querySelector(`button[name=action][value=${action}]`);
+        if (btn && !btn.disabled) btn.click();
+      });
+
+      // Sync range and number inputs for amount
+      function syncAmountInputs() {
+        const amountWrap = document.getElementById('amount-wrap');
+        if (!amountWrap) return;
+
+        const rangeInput = amountWrap.querySelector('input[type="range"]');
+        const numberInput = amountWrap.querySelector('input[type="number"]');
+
+        if (!rangeInput || !numberInput) return;
+
+        // Sync range to number input
+        rangeInput.addEventListener('input', () => {
+          numberInput.value = rangeInput.value;
+        });
+
+        // Sync number to range input
+        numberInput.addEventListener('input', () => {
+          const value = parseFloat(numberInput.value);
+          const min = parseFloat(rangeInput.min);
+          const max = parseFloat(rangeInput.max);
+
+          // Validate and clamp the value
+          if (!isNaN(value) && value >= min && value <= max) {
+            rangeInput.value = value;
+          } else if (value < min) {
+            rangeInput.value = min;
+            numberInput.value = min;
+          } else if (value > max) {
+            rangeInput.value = max;
+            numberInput.value = max;
+          }
+        });
+
+        // Handle number input blur to ensure valid value
+        numberInput.addEventListener('blur', () => {
+          const value = parseFloat(numberInput.value);
+          if (isNaN(value)) {
+            numberInput.value = rangeInput.value;
+          }
+        });
+      }
+
+      // Initialize sync when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', syncAmountInputs);
+      } else {
+        syncAmountInputs();
+      }
+
+      // Re-initialize after HTMX swaps
+      document.addEventListener('htmx:afterSwap', syncAmountInputs);
+
+      // Theme toggle functionality
+      function initThemeToggle() {
+        const themeToggleBtn = document.getElementById('btn-theme-toggle');
+        const moonIcon = themeToggleBtn.querySelector('.icon-moon');
+        const sunIcon = themeToggleBtn.querySelector('.icon-sun');
+        const html = document.documentElement;
+
+        // Get saved theme or default to light
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        const currentTheme = html.getAttribute('data-theme') || 'light';
+
+        // Apply saved theme
+        if (savedTheme === 'dark') {
+          html.setAttribute('data-theme', 'dark');
+          moonIcon.classList.add('hidden');
+          sunIcon.classList.remove('hidden');
+        } else {
+          html.setAttribute('data-theme', 'light');
+          moonIcon.classList.remove('hidden');
+          sunIcon.classList.add('hidden');
+        }
+
+        // Toggle theme on button click
+        themeToggleBtn.addEventListener('click', () => {
+          const currentTheme = html.getAttribute('data-theme') || 'light';
+          const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+          // Apply new theme
+          html.setAttribute('data-theme', newTheme);
+          localStorage.setItem('theme', newTheme);
+
+          // Update icons
+          if (newTheme === 'dark') {
+            moonIcon.classList.add('hidden');
+            sunIcon.classList.remove('hidden');
+          } else {
+            moonIcon.classList.remove('hidden');
+            sunIcon.classList.add('hidden');
+          }
+
+          // Add smooth transition
+          document.body.style.transition = 'background-color 0.3s ease, color 0.3s ease';
+          setTimeout(() => {
+            document.body.style.transition = '';
+          }, 300);
+        });
+      }
+
+      // Initialize theme toggle when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initThemeToggle);
+      } else {
+        initThemeToggle();
+      }
+    </script>
+    <style>
+      /* Safe area padding to avoid fixed footer overlap */
+      .pb-safe { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+      /* Theme transition effects */
+      * {
+        transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+      }
+
+      /* Theme toggle button hover effect */
+      #btn-theme-toggle:hover {
+        transform: scale(1.05);
+        transition: transform 0.2s ease;
+      }
+
+      /* Icon transition effects */
+      .icon-moon, .icon-sun {
+        transition: opacity 0.3s ease, transform 0.3s ease;
+      }
+
+      /* Clean board transitions */
+      #board {
+        transition: opacity 0.2s ease;
+      }
+      /* Landscape/short viewport: compact layout */
+      @media (orientation: landscape) {
+        #table-card { aspect-ratio: auto; height: min(68vh, calc(100vh - 200px)); }
+        .action-log-card {
+          width: 10.5rem !important; /* 168px, 更紧凑 */
+          right: 0.75rem !important; /* 12px, 靠近边缘 */
+          bottom: 0.75rem !important;
+          font-size: 0.75rem !important; /* 12px, 保持字体大小 */
+          padding: 0.5rem !important; /* 8px, 保持内边距 */
+          /* 固定高度以容纳5行日志 */
+          height: 7rem !important; /* 112px, 固定高度 */
+          max-height: 7rem !important;
+        }
+        .action-log-card .stat-label {
+          font-size: 0.625rem !important; /* 10px, 标题字体 */
+          margin-bottom: 0.25rem !important; /* 4px, 标题下边距 */
+          line-height: 1.2 !important; /* 紧凑行高 */
+        }
+        /* 调整日志内容的紧凑布局 - 固定5行 */
+        .action-log-card #action-log {
+          height: 5rem !important; /* 80px, 固定5行高度 */
+          max-height: 5rem !important;
+          margin-top: 0 !important; /* 移除上边距 */
+          overflow-y: auto !important; /* 启用垂直滚动 */
+          scrollbar-width: thin !important; /* 细滚动条 */
+        }
+        .action-log-card #action-log .space-y-1 > * + * {
+          margin-top: 0.125rem !important; /* 2px, 更紧凑的行间距 */
+        }
+        /* 确保每行日志有合适的行高 */
+        .action-log-card #action-log div {
+          line-height: 1.3 !important; /* 15.6px行高，配合12px字体 */
+          min-height: 1rem !important; /* 16px最小高度 */
+        }
+      }
+      @media (max-height: 540px) {
+        #table-card { aspect-ratio: auto; height: calc(100vh - 180px); }
+        .action-log-card {
+          width: 9rem !important; /* 144px, 更紧凑 */
+          right: 0.5rem !important; /* 8px */
+          bottom: 0.5rem !important;
+          font-size: 0.7rem !important; /* 11.2px */
+          padding: 0.375rem !important; /* 6px */
+          max-height: 4rem !important; /* 64px, 限制高度 */
+        }
+        .action-log-card .stat-label {
+          font-size: 0.6rem !important; /* 9.6px */
+        }
+        /* 调整日志内容的紧凑布局 */
+        .action-log-card #action-log {
+          max-height: 3rem !important; /* 48px, 更小的高度 */
+          margin-top: 0.25rem !important; /* 4px, 更小的上边距 */
+        }
+        .action-log-card #action-log .space-y-1 > * + * {
+          margin-top: 0.125rem !important; /* 2px, 更小的行间距 */
+        }
+      }
+      /* Mobile optimization for hole cards */
+      @media (max-width: 640px) {
+        .hole-cards-mobile {
+          gap: 0.75rem !important; /* 12px gap for mobile */
+        }
+        .hole-card-mobile {
+          width: 3rem !important; /* 48px width for mobile */
+          height: 4rem !important; /* 64px height for mobile */
+        }
+      }
+    </style>
+  </body>
+</html>
