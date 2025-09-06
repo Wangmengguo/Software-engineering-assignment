@@ -13,6 +13,7 @@
   - Bust：承接到下一手不足以贴盲（引擎 `start_hand_with_carry` 抛错）→ 结束。
   - Max Hands：达到 `max_hands`（如 20/50）→ 结束。
   - REST 返回 `409 + summary`；UI 返回 200 + OOB 结束卡片；仅在成功开出下一手时才 Push-Url。
+ - 牌局回放（UI）：`GET /api/v1/ui/replay/<hand_id>` 轻量回放页（玩家/公共牌时间轴/结果居中；控制：Reset/Prev/Next/Play/Start New Session；内置 UI 锁防止播放中多次点击）。
 
 
 — 怎么跑（Run） —
@@ -67,6 +68,7 @@ http://127.0.0.1:8000/api/v1/ui/game/<session_id>/<hand_id>
 - `GET  /api/v1/hand/<hid>/state` 查询状态与 `legal_actions`
 - `POST /api/v1/hand/<hid>/act` 执行动作（`check/call/bet/raise/fold/allin`）
 - `GET  /api/v1/hand/<hid>/replay` 回放（兼容 `/api/v1/replay/<hid>`）
+- `GET  /api/v1/ui/replay/<hid>` 回放页面（SSR，一页内控件：Reset/Prev/Next/Play）
 - `POST /api/v1/suggest` 最小建议 `{hand_id, actor}`
   - 响应：`{hand_id, actor, suggested{action,amount?}, rationale[], policy}`
   - 错误：`404` 不存在，`409` 非行动者/已结束，`422` 无法给出合法建议
@@ -82,6 +84,8 @@ UI 粘合端点（HTML 片段，返回 200 + OOB；仅转译/组合，不改变�
 - `POST /api/v1/ui/hand/<hand_id>/act` 执行动作（表单编码，含 CSRF；一次 OOB 更新 HUD/牌面/座位/金额/动作/日志）。
 - `POST /api/v1/ui/session/<session_id>/next` 开启下一手（成功→OOB + `HX-Push-Url` 到新 hand；若结束→返回 OOB 结束卡片，不 Push）。
 - `POST /api/v1/ui/coach/<hand_id>/suggest` 显式触发建议（若含金额则回填默认值；若被钳制显示胶囊提示）。
+  回放页（SSR）：
+ - `GET  /api/v1/ui/replay/<hand_id>`：服务器组装时间轴与基础数据；前端仅本地播放；播放时按钮带 UI 锁。
 
 — 怎么测（Test） —
 
@@ -112,10 +116,13 @@ coverage run -m pytest && coverage report --include "packages/poker_core/*"
     - `_coach.html`（建议/理由）
     - `_coach_trigger.html`（“Get Suggestion”按钮）
     - `_session_end.html`（会话结束卡片：Hands / Stacks / PnL / Reason + 按钮）
+  - 回放 UI：`apps/web-django/api/views_ui.py::ui_replay_view` + `templates/poker_teaching_replay.html`
+    - 数据源优先内存 REPLAYS，其次 DB `Replay`；与 `/hand/<hid>/replay` 保持一致。
+    - 仅界面播放，无后续请求；控制条含 Reset/Prev/Next/Play，播放时按钮禁用（UI 锁）。
 - 前端骨架：`apps/web-django/templates/poker_teaching_game_ui_skeleton_htmx_tailwind.html`
   - 不轮询；仅“执行动作/获取建议/开始下一手”发请求
   - Coach 显式触发；CSRF 通过 `{% csrf_token %}` 与 `hx-headers` 注入
-  - 首屏 SSR 为真数据；OOB 与刷新效果一致（Session 结束时 SSR 直接渲染结束卡片）。
+  - 首屏 SSR 为真数据；OOB 与刷新效果一致（Session 结束时 SSR 直接渲染结束卡片；回放页 SSR 直接可用）。
 
 数据与迁移
 

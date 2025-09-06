@@ -217,3 +217,27 @@ def test_ui_game_ssr_shows_end_card_when_session_ended():
     page = c.get(f"/api/v1/ui/game/{sid}/{hid}").content.decode("utf-8")
     assert "Session Ended" in page
     assert "/api/v1/ui/hand/" not in page  # no action form
+
+
+@pytest.mark.django_db
+def test_ui_replay_page_minimal():
+    c = Client()
+    # Create and finish a hand to persist replay
+    sid = _post(c, "/api/v1/session/start", {}).json()["session_id"]
+    hid = _post(c, "/api/v1/hand/start", {"session_id": sid, "seed": 9}).json()["hand_id"]
+    for _ in range(100):
+        st = c.get(f"/api/v1/hand/state/{hid}").json()
+        if st.get("state", {}).get("street") == "complete":
+            break
+        act = _prefer_action(st.get("legal_actions"))
+        r = _post(c, f"/api/v1/hand/act/{hid}", act).json()
+        if r.get("hand_over"):
+            break
+    # Load replay UI
+    r = c.get(f"/api/v1/ui/replay/{hid}")
+    assert r.status_code == 200
+    html = r.content.decode("utf-8")
+    assert "Hand Replay" in html
+    assert f">{hid}<" in html or hid in html  # hand id chip present
+    assert "id=\"action-log\"" in html
+    assert "card" in html  # board/cards present
