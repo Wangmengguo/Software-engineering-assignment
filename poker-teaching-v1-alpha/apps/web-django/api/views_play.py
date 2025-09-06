@@ -18,6 +18,7 @@ from poker_core.session_types import SessionView
 from poker_core.session_flow import next_hand
 from poker_core.suggest.service import build_suggestion
 from poker_core.analysis import annotate_player_hand
+from django.db import transaction
 
 # 领域函数（按你项目的实际导入路径调整）
 from poker_core.state_hu import (
@@ -27,6 +28,78 @@ from poker_core.state_hu import (
     settle_if_needed as _settle_if_needed,
     start_hand_with_carry as _start_hand_with_carry,
 )
+
+# --- Session end helpers (MVP) ---
+
+def _build_session_end_summary(s: Session, gs, reason: str, *, last_hand_id: str | None = None) -> dict:
+    """Build minimal end summary consistent across REST/UI."""
+    hands_played = int(getattr(s, "hand_counter", 0) or 0)
+    try:
+        stacks = [int(gs.players[0].stack), int(gs.players[1].stack)]
+    except Exception:
+        stacks = list(getattr(s, "stacks", []) or [0, 0])
+    init_stack = int((s.config or {}).get("init_stack", 0) or 0)
+    pnl = [stacks[0] - init_stack, stacks[1] - init_stack] if init_stack else [0, 0]
+    pnl_fmt = [f"{pnl[0]:+d}", f"{pnl[1]:+d}"]
+    return {
+        "ended_reason": reason,
+        "hands_played": hands_played,
+        "final_stacks": stacks,
+        "pnl": pnl,
+        "pnl_fmt": pnl_fmt,
+        "last_hand_id": last_hand_id,
+    }
+
+
+def finalize_session(s: Session, gs, reason: str, *, last_hand_id: str | None = None) -> dict:
+    """Mark a session as ended; idempotent; return summary dict."""
+    if s.status == "ended":
+        stats = dict(s.stats or {})
+        return {
+            "ended_reason": s.ended_reason,
+            "hands_played": stats.get("hands_played"),
+            "final_stacks": stats.get("final_stacks"),
+            "pnl": stats.get("pnl"),
+            "pnl_fmt": stats.get("pnl_fmt"),
+            "last_hand_id": stats.get("last_hand_id"),
+        }
+
+    from datetime import datetime, timezone
+    with transaction.atomic():
+        s_locked = Session.objects.select_for_update().get(pk=s.pk)
+        if s_locked.status == "ended":
+            stats = dict(s_locked.stats or {})
+            return {
+                "ended_reason": s_locked.ended_reason,
+                "hands_played": stats.get("hands_played"),
+                "final_stacks": stats.get("final_stacks"),
+                "pnl": stats.get("pnl"),
+                "pnl_fmt": stats.get("pnl_fmt"),
+                "last_hand_id": stats.get("last_hand_id"),
+            }
+        summary = _build_session_end_summary(s_locked, gs, reason, last_hand_id=last_hand_id)
+        s_locked.status = "ended"
+        s_locked.ended_reason = reason
+        s_locked.ended_at = datetime.now(timezone.utc)
+        s_locked.stats = summary
+        s_locked.save(update_fields=["status", "ended_reason", "ended_at", "stats", "updated_at"])
+
+    # Structured log for observability
+    try:
+        import logging
+        logging.info(
+            "session_end",
+            extra={
+                "event": "session_end",
+                "session_id": s.session_id,
+                "last_hand_id": last_hand_id,
+                **summary,
+            },
+        )
+    except Exception:
+        pass
+
+    return summary
 
 # 从 events 中提取 outcome 信息
 def _extract_outcome_from_events(gs) -> dict | None:
@@ -140,6 +213,7 @@ def _persist_replay(hand_id: str, gs) -> None:
         "init_stack": serializers.IntegerField(required=False, default=200, min_value=1),
         "sb": serializers.IntegerField(required=False, default=1, min_value=1),
         "bb": serializers.IntegerField(required=False, default=2, min_value=2),
+        "max_hands": serializers.IntegerField(required=False, min_value=1, allow_null=True),
     }),
     responses={200: inline_serializer(name="StartSessionResp", fields={
         "session_id": serializers.CharField(),
@@ -161,11 +235,18 @@ def session_start_api(request):
         init_stack = int(request.data.get("init_stack", 200))
         sb = int(request.data.get("sb", 1))
         bb = int(request.data.get("bb", 2))
+        max_hands = request.data.get("max_hands", None)
+        cfg = {"init_stack": init_stack, "sb": sb, "bb": bb}
+        if max_hands is not None:
+            try:
+                cfg["max_hands"] = int(max_hands)
+            except Exception:
+                pass
 
         session_id = str(uuid.uuid4())
         s = Session.objects.create(
             session_id=session_id,
-            config={"init_stack": init_stack, "sb": sb, "bb": bb},
+            config=cfg,
             stacks=[init_stack, init_stack],
             button=0,
             hand_counter=1,
@@ -437,59 +518,87 @@ def session_next_api(request):
     method = "POST"
     session_id = request.data.get("session_id")
     seed = request.data.get("seed")
-    s = get_object_or_404(Session, session_id=session_id)
 
-    # 1) 找到该会话最新且 complete 的上一手
-    latest_gs, latest_cfg = None, None
-    for hid, item in reversed(list(HANDS.items())):
-        if item.get("session_id") == session_id:
-            gs = item.get("gs")
-            latest_gs = gs
-            latest_cfg = item.get("cfg")
-            if getattr(gs, "street", None) == "complete":
-                break
-    if latest_gs is None or getattr(latest_gs, "street", None) != "complete":
+    # Serialize concurrent "next" with a row lock
+    from django.db import transaction
+    with transaction.atomic():
         try:
-            metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+            s = Session.objects.select_for_update().get(session_id=session_id)
+        except Session.DoesNotExist:
+            return Response({"detail": "session not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Idempotent: already ended
+        if s.status == "ended":
+            try:
+                metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+            except Exception:
+                pass
+            return Response({"session_id": s.session_id, **(s.stats or {})}, status=status.HTTP_409_CONFLICT)
+
+        # 1) Find latest completed hand for this session
+        latest_gs, latest_cfg, latest_hid = None, None, None
+        for hid, item in reversed(list(HANDS.items())):
+            if item.get("session_id") == session_id:
+                gs = item.get("gs")
+                latest_gs = gs
+                latest_cfg = item.get("cfg")
+                latest_hid = hid
+                if getattr(gs, "street", None) == "complete":
+                    break
+        if latest_gs is None or getattr(latest_gs, "street", None) != "complete":
+            try:
+                metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+            except Exception:
+                pass
+            return Response({"detail": "last hand not complete"}, status=status.HTTP_409_CONFLICT)
+
+        # 1.5) Max-hands end (before planning next)
+        try:
+            max_hands = int((s.config or {}).get("max_hands", 0) or 0)
         except Exception:
-            pass
-        return Response({"detail": "last hand not complete"}, status=status.HTTP_409_CONFLICT)
+            max_hands = 0
+        if max_hands and int(s.hand_counter or 0) >= max_hands:
+            summary = finalize_session(s, latest_gs, "max_hands", last_hand_id=latest_hid)
+            try:
+                metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+            except Exception:
+                pass
+            return Response({"session_id": s.session_id, **summary}, status=status.HTTP_409_CONFLICT)
 
-    # 配置统一兜底到 DB
-    cfg_for_next = latest_cfg or s.config
+        # 2) Plan next hand
+        cfg_for_next = latest_cfg or s.config
+        sv = SessionView(
+            session_id=s.session_id,
+            button=int(s.button),
+            stacks=tuple(s.stacks),
+            hand_no=int(s.hand_counter),
+            current_hand_id=None
+        )
+        plan = next_hand(sv, latest_gs, seed=seed)
 
-    # 计算下一手参数（按钮、堆栈、手数+1）
+        # 3) Update session persistent fields
+        s.button = plan.next_button
+        s.stacks = list(plan.stacks)
+        s.hand_counter = plan.next_hand_no
+        s.save(update_fields=["button", "stacks", "hand_counter", "updated_at"])
 
-    # 2) 构造 Session 视图（从模型）
-    sv = SessionView(
-        session_id=s.session_id,
-        button=int(s.button),
-        stacks=tuple(s.stacks),
-        hand_no=int(s.hand_counter),
-        current_hand_id=None
-    )
+        # 4) Start new hand (with carried stacks)
+        new_hid = str(uuid.uuid4())
+        try:
+            gs_new = _start_hand_with_carry(
+                cfg_for_next, session_id=session_id, hand_id=new_hid,
+                button=plan.next_button, stacks=plan.stacks, seed=plan.seed
+            )
+        except ValueError:
+            summary = finalize_session(s, latest_gs, "bust", last_hand_id=latest_hid)
+            try:
+                metrics.observe_request(route, method, "409", time.perf_counter() - t0)
+            except Exception:
+                pass
+            return Response({"session_id": session_id, **summary}, status=status.HTTP_409_CONFLICT)
+        HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
 
-    # 3) 规划下一手
-    plan = next_hand(
-        sv,
-        latest_gs,
-        seed=seed
-    )
-
-    # 4) 更新 Session 持久层
-    s.button = plan.next_button
-    s.stacks = list(plan.stacks)
-    s.hand_counter = plan.next_hand_no
-    s.save(update_fields=["button", "stacks", "hand_counter", "updated_at"])
-
-    # 5) 启动新手（关键：带入 plan.stacks）
-    new_hid = str(uuid.uuid4())
-    gs_new = _start_hand_with_carry(
-        cfg_for_next, session_id=session_id, hand_id=new_hid,
-        button=plan.next_button, stacks=plan.stacks, seed=plan.seed
-    )
-    HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
-
+    # outside transaction: respond success
     try:
         return Response({
         "session_id": session_id,

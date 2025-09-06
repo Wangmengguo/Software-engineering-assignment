@@ -79,6 +79,9 @@
         .divider {@apply h-px bg-[rgb(var(--border))];}
       }
     </style>
+
+    <!-- Theme toggle styles -->
+    <link rel="stylesheet" href="/static/css/theme-toggle.css">
   </head>
 
   <body class="min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))] antialiased">
@@ -115,19 +118,7 @@
           <div class="flex items-center gap-2">
             <div id="global-error" class="hidden"></div>
             <div id="status-chip" class="chip hidden"></div>
-            <button class="btn btn-ghost" id="btn-theme-toggle" title="Toggle Theme">
-              <!-- Light mode icon (moon) - shown when in light mode -->
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-moon opacity-70">
-                <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-                <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
-              </svg>
-              <!-- Dark mode icon (sun) - shown when in dark mode -->
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sun opacity-70 hidden">
-                <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z"/>
-              </svg>
-            </button>
+            {% include "ui/_theme_toggle.html" %}
           </div>
         </div>
       </header>
@@ -197,20 +188,24 @@
     >
       <div class="mx-auto px-4 lg:px-6 py-3 flex items-center justify-between" style="max-width: 900px;">
         <!-- legal_actions comes from server; no client inference -->
-        <form id="action-form" class="flex items-center gap-2"
-              hx-post="/api/v1/ui/hand/{{hand_id}}/act"
-              hx-swap="none"
-              hx-indicator="#act-indicator"
-              hx-include="#amount-wrap"
-        >
-          {% csrf_token %}
-          {% include "ui/_actions.html" with actions=actions ended=False only %}
+        {% if session_ended %}
+          {% include "ui/_session_end.html" with session_id=session_id summary=ended_summary ended_reason_text=ended_reason_text last_hand_id=last_hand_id %}
+        {% else %}
+          <form id="action-form" class="flex items-center gap-2"
+                hx-post="/api/v1/ui/hand/{{hand_id}}/act"
+                hx-swap="none"
+                hx-indicator="#act-indicator"
+                hx-include="#amount-wrap"
+          >
+            {% csrf_token %}
+            {% include "ui/_actions.html" with actions=actions ended=False only %}
 
-          <!-- Amount input (server-controlled visibility/range) -->
-          {% include "ui/_amount.html" with amount=actions.amount only %}
+            <!-- Amount input (server-controlled visibility/range) -->
+            {% include "ui/_amount.html" with amount=actions.amount only %}
 
-          <div id="act-indicator" class="htmx-indicator text-xs text-[rgb(var(--muted))] ml-2">Sending…</div>
-        </form>
+            <div id="act-indicator" class="htmx-indicator text-xs text-[rgb(var(--muted))] ml-2">Sending…</div>
+          </form>
+        {% endif %}
       </div>
     </footer>
 
@@ -294,80 +289,11 @@
       // Re-initialize after HTMX swaps
       document.addEventListener('htmx:afterSwap', syncAmountInputs);
 
-      // Theme toggle functionality
-      function initThemeToggle() {
-        const themeToggleBtn = document.getElementById('btn-theme-toggle');
-        const moonIcon = themeToggleBtn.querySelector('.icon-moon');
-        const sunIcon = themeToggleBtn.querySelector('.icon-sun');
-        const html = document.documentElement;
-
-        // Get saved theme or default to light
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        const currentTheme = html.getAttribute('data-theme') || 'light';
-
-        // Apply saved theme
-        if (savedTheme === 'dark') {
-          html.setAttribute('data-theme', 'dark');
-          moonIcon.classList.add('hidden');
-          sunIcon.classList.remove('hidden');
-        } else {
-          html.setAttribute('data-theme', 'light');
-          moonIcon.classList.remove('hidden');
-          sunIcon.classList.add('hidden');
-        }
-
-        // Toggle theme on button click
-        themeToggleBtn.addEventListener('click', () => {
-          const currentTheme = html.getAttribute('data-theme') || 'light';
-          const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-
-          // Apply new theme
-          html.setAttribute('data-theme', newTheme);
-          localStorage.setItem('theme', newTheme);
-
-          // Update icons
-          if (newTheme === 'dark') {
-            moonIcon.classList.add('hidden');
-            sunIcon.classList.remove('hidden');
-          } else {
-            moonIcon.classList.remove('hidden');
-            sunIcon.classList.add('hidden');
-          }
-
-          // Add smooth transition
-          document.body.style.transition = 'background-color 0.3s ease, color 0.3s ease';
-          setTimeout(() => {
-            document.body.style.transition = '';
-          }, 300);
-        });
-      }
-
-      // Initialize theme toggle when DOM is ready
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initThemeToggle);
-      } else {
-        initThemeToggle();
-      }
     </script>
     <style>
       /* Safe area padding to avoid fixed footer overlap */
       .pb-safe { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
 
-      /* Theme transition effects */
-      * {
-        transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-      }
-
-      /* Theme toggle button hover effect */
-      #btn-theme-toggle:hover {
-        transform: scale(1.05);
-        transition: transform 0.2s ease;
-      }
-
-      /* Icon transition effects */
-      .icon-moon, .icon-sun {
-        transition: opacity 0.3s ease, transform 0.3s ease;
-      }
 
       /* Clean board transitions */
       #board {
@@ -441,5 +367,8 @@
         }
       }
     </style>
+
+    <!-- Theme toggle JavaScript -->
+    <script src="/static/js/theme-toggle.js"></script>
   </body>
 </html>

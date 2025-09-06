@@ -11,7 +11,7 @@ from .views_play import (
     hand_auto_step_api,
 )
 from .views_suggest import SuggestView
-from .views_ui import ui_hand_act, ui_session_next, ui_coach_suggest, ui_game_view, ui_start
+from .views_ui import ui_hand_act, ui_session_next, ui_coach_suggest, ui_game_view, ui_start, ui_replay_view
 from . import metrics
 
 urlpatterns = [
@@ -33,6 +33,7 @@ urlpatterns = [
     path("suggest", SuggestView.as_view(), name="suggest"),
     # UI glue (HTML, OOB fragments)
     path("ui/game/<str:session_id>/<str:hand_id>", ui_game_view, name="ui_game"),
+    path("ui/replay/<str:hand_id>", ui_replay_view, name="ui_replay"),
     path("ui/start", ui_start, name="ui_start"),
     path("ui/hand/<str:hand_id>/act", ui_hand_act, name="ui_hand_act"),
     path("ui/session/<str:session_id>/next", ui_session_next, name="ui_session_next"),

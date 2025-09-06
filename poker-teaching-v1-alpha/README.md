@@ -8,7 +8,11 @@
 - 评牌：优先 PokerKit，不可用时回退简化评估。
 - 会话流：多手对局（按钮轮转、承接筹码）；统一回放结构持久化至 DB。
 - 建议：`POST /api/v1/suggest`（preflop v0；仅从合法动作集合内选取，带钳制与理由）。
-- 前端最小 UI（MVP）：HTMX + Tailwind，无轮询、事件驱动，一次响应用 OOB 片段更新 HUD/牌面/行动条/金额/Coach/错误；Coach 显式触发；前端零推导（动作与金额范围完全由后端提供）。
+- 前端最小 UI（MVP）：HTMX + Tailwind，无轮询、事件驱动；一次响应用 OOB 同步更新 HUD/牌面/行动条/金额/Coach/错误/座位与日志；Coach 显式触发；前端零推导（动作与金额范围完全由后端提供）。
+- 会话结束（MVP，仅两条规则）：
+  - Bust：承接到下一手不足以贴盲（引擎 `start_hand_with_carry` 抛错）→ 结束。
+  - Max Hands：达到 `max_hands`（如 20/50）→ 结束。
+  - REST 返回 `409 + summary`；UI 返回 200 + OOB 结束卡片；仅在成功开出下一手时才 Push-Url。
 
 
 — 怎么跑（Run） —
@@ -55,7 +59,7 @@ http://127.0.0.1:8000/api/v1/ui/game/<session_id>/<hand_id>
 
 — 怎么用（API 快查） —
 
-- `POST /api/v1/session/start` 创建会话（可传 `sb/bb`）
+- `POST /api/v1/session/start` 创建会话（可传 `sb/bb/max_hands`）
 - `GET  /api/v1/session/<sid>/state` 会话视图
   - `stacks`: 承接栈（下一手扣盲前）
   - `stacks_after_blinds`: 当前手已扣盲后的实时栈（无手牌则为 null）
@@ -67,12 +71,17 @@ http://127.0.0.1:8000/api/v1/ui/game/<session_id>/<hand_id>
   - 响应：`{hand_id, actor, suggested{action,amount?}, rationale[], policy}`
   - 错误：`404` 不存在，`409` 非行动者/已结束，`422` 无法给出合法建议
 
+会话推进/结束：
+
+- `POST /api/v1/session/next`：成功→`200 {session_id, hand_id, state}`；若结束→`409 {session_id, ended_reason, hands_played, final_stacks:[p0,p1], pnl:[d0,d1], pnl_fmt:["+N","-N"], last_hand_id}`
+  - `ended_reason ∈ {bust, max_hands}`；`last_hand_id` 便于“查看上一手”。
+
 UI 粘合端点（HTML 片段，返回 200 + OOB；仅转译/组合，不改变底层 REST 语义）
 
-- `GET  /api/v1/ui/game/<session_id>/<hand_id>` 首屏 SSR（骨架 + 初始状态）
-- `POST /api/v1/ui/hand/<hand_id>/act` 执行动作（表单编码，含 CSRF）
-- `POST /api/v1/ui/session/<session_id>/next` 开启下一手（OOB 同步替换 `#action-form` 与 `#coach-trigger` 指向新 hand）
-- `POST /api/v1/ui/coach/<hand_id>/suggest` 显式触发建议（若含金额则写回输入默认值；若被钳制 HUD 出“小胶囊”）
+- `GET  /api/v1/ui/game/<session_id>/<hand_id>` 首屏 SSR（HUD/牌面/座位/日志/行动条为“真数据”）。
+- `POST /api/v1/ui/hand/<hand_id>/act` 执行动作（表单编码，含 CSRF；一次 OOB 更新 HUD/牌面/座位/金额/动作/日志）。
+- `POST /api/v1/ui/session/<session_id>/next` 开启下一手（成功→OOB + `HX-Push-Url` 到新 hand；若结束→返回 OOB 结束卡片，不 Push）。
+- `POST /api/v1/ui/coach/<hand_id>/suggest` 显式触发建议（若含金额则回填默认值；若被钳制显示胶囊提示）。
 
 — 怎么测（Test） —
 
@@ -87,20 +96,32 @@ coverage run -m pytest && coverage report --include "packages/poker_core/*"
 - 建议：`packages/poker_core/suggest/*`
   - 策略：`policy.py`；类型/工具：`types.py` / `utils.py`；服务：`service.py`
   - 动作结构化：`packages/poker_core/domain/actions.py`
-- REST API：`apps/web-django/api/views_play.py`（会话/手牌/回放）、`views_suggest.py`（建议）
+- REST API：`apps/web-django/api/views_play.py`（会话/手牌/回放/会话结束）、`views_suggest.py`（建议）
+  - 会话结束：`finalize_session(session, last_gs, reason)` 幂等 + 事务；返回统一 summary；在 `/session/next` 的 Max Hands 与 Bust 分支调用。
+  - 并发与一致性：`/session/next` 与 `finalize_session` 使用 `transaction.atomic() + select_for_update()` 防止并发双写；仅成功开新手时返回 Push-Url（UI 端）。
 - UI 粘合：`apps/web-django/api/views_ui.py`（HTMX 事件驱动 + OOB 片段）
   - 片段模板：`apps/web-django/templates/ui/`
     - `_error.html`（统一错误横幅 `#global-error`）
     - `_hud.html`（更新 `#hud-*` 与 `aria-live`）
     - `_board.html`（公共牌/底池）
+    - `_seats.html`（座位/按钮位/栈与“本街投入 Bet”）
+    - `_log.html`（最近 5 条行动，`You/Opponent + action [+amount]`）
     - `_action_form.html`（整表单 OOB；当 hand 变化时整体替换，确保 hx-post 指向新 hand）
-    - `_actions.html`（动作按钮；结束态展示“开始下一手/回放”）
+    - `_actions.html`（动作按钮）
     - `_amount.html`（金额输入显示/范围/默认值）
     - `_coach.html`（建议/理由）
-    - `_coach_trigger.html`（“获取建议”按钮，携带 hand_id）
+    - `_coach_trigger.html`（“Get Suggestion”按钮）
+    - `_session_end.html`（会话结束卡片：Hands / Stacks / PnL / Reason + 按钮）
 - 前端骨架：`apps/web-django/templates/poker_teaching_game_ui_skeleton_htmx_tailwind.html`
   - 不轮询；仅“执行动作/获取建议/开始下一手”发请求
   - Coach 显式触发；CSRF 通过 `{% csrf_token %}` 与 `hx-headers` 注入
+  - 首屏 SSR 为真数据；OOB 与刷新效果一致（Session 结束时 SSR 直接渲染结束卡片）。
+
+数据与迁移
+
+- 最小迁移：`apps/web-django/api/migrations/0003_session_end_fields.py`
+  - `Session.ended_reason`（null=True）、`ended_at`（null=True）、`stats`（default=dict）。
+  - 老数据 `status` 保持原值（running）。
 
 准则（MVP 保持简洁）
 

@@ -15,6 +15,9 @@ class Session(models.Model):
     button = models.IntegerField(default=0)       # 0 or 1
     hand_counter = models.IntegerField(default=1)
     status = models.CharField(max_length=16, default="running")
+    ended_reason = models.CharField(max_length=16, null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    stats = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

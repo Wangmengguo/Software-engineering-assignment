@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Poker Teaching — Hand Replay (Preview)</title>
+
+    <!-- Tailwind (MVP) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: { extend: { boxShadow: { elevated: "0 4px 16px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04)" } } }
+      };
+    </script>
+
+    <!-- 设计变量：功能极简，无绿色，与游戏页一致 -->
+    <style>
+      :root{
+        --bg:248 249 251; --surface:255 255 255; --text:17 24 39; --muted:113 113 122; --border:228 228 231; --ring:226 232 240;
+        --brand-500:99 102 241; --brand-600:79 70 229; --brand-700:67 56 202; --action:var(--brand-600);
+        --info:59 130 246; --warn:245 158 11; --danger:239 68 68;
+      }
+      [data-theme="dark"]{
+        --bg:17 17 19; --surface:24 24 27; --text:244 244 245; --muted:161 161 170; --border:63 63 70; --ring:63 63 70;
+        --brand-500:129 140 248; --brand-600:99 102 241; --brand-700:79 70 229; --action:var(--brand-600);
+        --info:96 165 250; --warn:245 158 11; --danger:248 113 113;
+      }
+    </style>
+    <style type="text/tailwindcss">
+      @layer components{
+        .card{@apply bg-[rgb(var(--surface))] border border-[rgb(var(--border))] rounded-2xl shadow-sm}
+        .btn{@apply inline-flex items-center justify-center gap-2 rounded-xl h-11 px-4 font-medium transition active:scale-[.98] select-none disabled:opacity-50 disabled:cursor-not-allowed}
+        .btn-primary{@apply text-white shadow; background-color:rgb(var(--action))}
+        .btn-primary:hover{filter:brightness(.95)}
+        .btn-ghost{@apply border border-[rgb(var(--border))] bg-transparent text-[rgb(var(--text))]}
+        .stat-label{@apply text-xs uppercase tracking-wide text-[rgb(var(--muted))]}
+        .stat-value{@apply text-sm font-semibold text-[rgb(var(--text))]}
+        .chip{@apply text-xs font-semibold px-2.5 py-1 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface))]}
+        .kbd{@apply text-[10px] px-1.5 py-0.5 rounded border border-[rgb(var(--border))] text-[rgb(var(--muted))]}
+        .divider{@apply h-px bg-[rgb(var(--border))]}
+      }
+      .row-current{background:rgba(0,0,0,.04)}
+      .pb-safe{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+    </style>
+  </head>
+
+  <body class="min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))] antialiased">
+    <!-- 布局宽度与原页一致（≈900px）-->
+    <div class="layout-root mx-auto px-4 lg:px-6 grid gap-6 min-h-screen pb-safe" style="max-width: 900px;">
+      <!-- 顶部 HUD（与游戏页一致） -->
+      <header class="sticky top-0 z-40 -mx-4 lg:-mx-6 px-4 lg:px-6 py-3 bg-[rgb(var(--bg))]/80 backdrop-blur border-b border-[rgb(var(--border))]" aria-label="Replay HUD">
+        <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+          <div class="flex items-center gap-4">
+            <div class="text-sm"><div class="stat-label">Blinds</div><div class="stat-value" id="hud-blinds">SB 5 / BB 10</div></div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm"><div class="stat-label">Pot</div><div class="stat-value" id="hud-pot">0</div></div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm"><div class="stat-label">Hand</div><div class="stat-value" id="hud-hand">#128</div></div>
+            <div class="w-px h-8 bg-[rgb(var(--border))]"></div>
+            <div class="text-sm"><div class="stat-label">TO ACT</div><div class="stat-value" id="hud-actor">你</div></div>
+          </div>
+          <div class="text-xs text-[rgb(var(--muted))]">Texas Hold’em</div>
+        </div>
+      </header>
+
+      <!-- 桌面区域（与游戏页同布局） -->
+      <main class="space-y-4" aria-label="Game Table">
+        <section class="card p-4 relative aspect-[16/10] overflow-hidden shadow-elevated" id="table-card">
+          <!-- 中央：公共牌 + 底池 -->
+          <div class="absolute inset-0 grid place-items-center pointer-events-none">
+            <div id="board" class="flex items-center gap-2">
+              <playing-card cid="?" style="width:48px"></playing-card>
+              <playing-card cid="?" style="width:48px"></playing-card>
+              <playing-card cid="?" style="width:48px"></playing-card>
+              <playing-card cid="?" style="width:48px"></playing-card>
+              <playing-card cid="?" style="width:48px"></playing-card>
+            </div>
+            <div class="mt-3 chip" id="chip-pot">Pot 0</div>
+          </div>
+
+          <!-- 上侧：对手座位（与原有样式一致） -->
+          <div class="absolute inset-x-4 top-4 flex items-center justify-center">
+            <div class="inline-flex items-center gap-2 card px-3 py-2">
+              <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))]"></div>
+              <div>
+                <div class="text-sm font-medium">对手</div>
+                <div class="text-xs text-[rgb(var(--muted))]">Stack <span id="villain-stack">2000</span></div>
+              </div>
+              <span class="chip" id="dealer-btn">D</span>
+            </div>
+          </div>
+
+          <!-- 下侧：玩家座位（与原有样式一致） -->
+          <div class="absolute inset-x-4 bottom-4 flex items-center justify-center">
+            <div class="inline-flex items-center gap-3 card px-3 py-2 hole-cards-mobile">
+              <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))]"></div>
+              <div>
+                <div class="text-sm font-semibold">你</div>
+                <div class="text-xs text-[rgb(var(--muted))]">Stack <span id="hero-stack">2000</span></div>
+              </div>
+              <div class="flex items-center gap-2">
+                <playing-card id="hero-1" cid="??" style="width:48px" class="hole-card-mobile"></playing-card>
+                <playing-card id="hero-2" cid="??" style="width:48px" class="hole-card-mobile -ml-2"></playing-card>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右下：行动日志（与原有样式一致） -->
+          <div class="absolute right-3 bottom-3 w-48 card p-3 text-sm action-log-card">
+            <div class="stat-label">Action Log</div>
+            <div id="action-log" class="mt-1 space-y-1 max-h-28 overflow-auto pr-1"></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- 右侧：Coach → Analysis（保持卡片结构，标题改为 Analysis） -->
+      <aside class="sticky top-[64px] self-start">
+        <details class="card overflow-hidden" open>
+          <summary class="list-none select-none cursor-pointer">
+            <div class="flex items-center justify-between gap-3 p-4">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-[rgb(var(--info))]"></div>
+                <div class="font-semibold">Analysis</div>
+              </div>
+              <span class="text-xs text-[rgb(var(--muted))]">当前步的简要分析</span>
+            </div>
+          </summary>
+          <div class="divider"></div>
+          <div class="p-4 space-y-3 text-sm" id="analysis-panel">
+            点击底部按钮开始回放，分析会随步骤更新。
+          </div>
+        </details>
+
+        <div class="mt-4 card p-4">
+          <div class="stat-label">快捷键</div>
+          <div class="mt-2 grid grid-cols-4 gap-2 text-sm">
+            <div class="flex items-center gap-1"><span class="kbd">J</span>上一步</div>
+            <div class="flex items-center gap-1"><span class="kbd">L</span>下一步</div>
+            <div class="flex items-center gap-1"><span class="kbd">K</span>播放/暂停</div>
+            <div class="flex items-center gap-1"><span class="kbd">B</span>重置</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 底部行动条：替换成回放控制（一比一占位/风格） -->
+    <footer class="fixed bottom-0 inset-x-0 z-50 bg-[rgb(var(--surface))]/90 backdrop-blur border-t border-[rgb(var(--border))]" aria-label="Replay Controls">
+      <div class="mx-auto px-4 lg:px-6 py-3 flex items-center justify-between" style="max-width: 900px;">
+        <div class="flex items-center gap-2" id="replay-controls">
+          <button id="btn-restart" class="btn btn-ghost" accesskey="b">⏮︎ 重置</button>
+          <button id="btn-prev" class="btn btn-ghost" accesskey="j">◀︎ 上一步</button>
+          <button id="btn-next" class="btn btn-primary" accesskey="l">▶︎ 下一步</button>
+          <button id="btn-play" class="btn btn-ghost" accesskey="k">▷ 播放</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="chip" id="street-chip">Preflop</div>
+          <div class="chip" id="step-chip">0 / 0</div>
+        </div>
+      </div>
+    </footer>
+
+    <!-- CardMeister（与主站一致）-->
+    <script src="https://cardmeister.github.io/elements.cardmeister.min.js"></script>
+
+    <!-- 预览数据（纯前端，不接接口） -->
+    <script>
+      const replay = {
+        blinds:{sb:5, bb:10}, hand_no:128, button:'villain',
+        hero_stack:2000, villain_stack:2000,
+        hero:["Ah","Kd"], villain:["Ad","Qd"], board:["As","Kd","7c","2d","2h"],
+        actions:[
+          {street:'Preflop', actor:'hero', move:'raise', amt:20, note:'按钮位标准加注 2bb'},
+          {street:'Preflop', actor:'villain', move:'call', amt:20, note:'大盲跟注'},
+          {street:'Flop', actor:'system', move:'deal_flop'},
+          {street:'Flop', actor:'hero', move:'bet', amt:30, note:'顶两对延续下注小尺码'},
+          {street:'Flop', actor:'villain', move:'call', amt:30, note:'中对+后门跟注'},
+          {street:'Turn', actor:'system', move:'deal_turn'},
+          {street:'Turn', actor:'hero', move:'bet', amt:80, note:'价值下注 2/3 pot'},
+          {street:'Turn', actor:'villain', move:'fold', note:'弃牌'}
+        ]
+      };
+    </script>
+
+    <!-- 迷你回放引擎（仅视觉） -->
+    <script>
+      (function(){
+        const $ = s=>document.querySelector(s);
+        // HUD 初始化
+        $('#hud-blinds').textContent = `SB ${replay.blinds.sb} / BB ${replay.blinds.bb}`;
+        $('#hud-hand').textContent = `#${replay.hand_no}`;
+        $('#villain-stack').textContent = replay.villain_stack;
+        $('#hero-stack').textContent = replay.hero_stack;
+        if(replay.button==='hero'){ $('#dealer-btn').classList.add('hidden'); }
+
+        // 手牌
+        $('#hero-1').setAttribute('cid', replay.hero[0]);
+        $('#hero-2').setAttribute('cid', replay.hero[1]);
+
+        // 公共牌占位
+        const boardSlots = Array.from(document.querySelectorAll('#board playing-card'));
+        const logBox = $('#action-log');
+        const analysis = $('#analysis-panel');
+        const streetChip = $('#street-chip');
+        const stepChip = $('#step-chip');
+        const potHud = $('#hud-pot');
+        const potChip = $('#chip-pot');
+
+        let i=-1, total=replay.actions.length, pot=0;
+        stepChip.textContent = `${Math.max(i,0)} / ${total}`;
+
+        // 渲染日志（全部），当前步高亮
+        function renderLog(){
+          logBox.innerHTML='';
+          replay.actions.forEach((a,idx)=>{
+            const row=document.createElement('div');
+            row.className='flex justify-between';
+            const who = a.actor==='hero'?'你':(a.actor==='villain'?'对手':'系统');
+            row.dataset.idx = idx;
+            row.innerHTML = `<span class="text-[rgb(var(--muted))]">${a.street}</span><span>${who} ${a.move}${a.amt?(' '+a.amt):''}</span>`;
+            logBox.appendChild(row);
+          })
+        }
+        renderLog();
+
+        function setStep(){ stepChip.textContent = `${Math.max(i,0)} / ${total}`; }
+        function setPot(){ $('#hud-pot').textContent = pot; potChip.textContent = `Pot ${pot}`; }
+        function setStreet(s){ streetChip.textContent = s; }
+        function highlight(){
+          logBox.querySelectorAll('[data-idx]').forEach(el=>el.classList.remove('row-current'));
+          if(i>=0){ const row = logBox.querySelector(`[data-idx="${i}"]`); row&&row.classList.add('row-current'); row&&row.scrollIntoView({block:'nearest'}); }
+        }
+        function showBoard(k){ // 显示第 k 张公共牌
+          const cid = replay.board[k];
+          if(cid) boardSlots[k].setAttribute('cid', cid);
+        }
+        function hideBoard(k){ boardSlots[k].setAttribute('cid', '?'); }
+
+        // Analysis 简易占位
+        function setAnalysis(a){
+          if(!a){ analysis.textContent = '开始回放，逐步呈现每一步的要点。'; return; }
+          const who = a.actor==='hero'?'你':(a.actor==='villain'?'对手':'系统');
+          analysis.innerHTML = `
+            <div class="text-sm">当前步：<strong>${a.street}</strong> · ${who} <strong>${a.move}</strong>${a.amt?(' '+a.amt):''}</div>
+            ${a.note?`<div class="mt-1 text-[rgb(var(--muted))]">提示：${a.note}</div>`:''}
+          `;
+        }
+
+        function apply(a){
+          if(!a) return;
+          setStreet(a.street||'—');
+          if(typeof a.amt==='number') pot += a.amt;
+          if(a.move==='deal_flop'){ showBoard(0); showBoard(1); showBoard(2); }
+          if(a.move==='deal_turn'){ showBoard(3); }
+          if(a.move==='deal_river'){ showBoard(4); }
+          setAnalysis(a); setPot();
+        }
+        function rollback(a){
+          if(!a) return;
+          if(typeof a.amt==='number') pot -= a.amt;
+          if(a.move==='deal_flop'){ hideBoard(0); hideBoard(1); hideBoard(2); }
+          if(a.move==='deal_turn'){ hideBoard(3); }
+          if(a.move==='deal_river'){ hideBoard(4); }
+          setAnalysis(replay.actions[i-1]); setPot();
+        }
+
+        function next(){ if(i+1>=total) return; i++; apply(replay.actions[i]); setStep(); highlight(); }
+        function prev(){ if(i<0) return; rollback(replay.actions[i]); i--; setStep(); highlight(); }
+        function restart(){ while(i>=0){ rollback(replay.actions[i]); i--; } pot=0; setStep(); highlight(); setStreet('Preflop'); setAnalysis(null); }
+
+        document.getElementById('btn-next').addEventListener('click', next);
+        document.getElementById('btn-prev').addEventListener('click', prev);
+        document.getElementById('btn-restart').addEventListener('click', restart);
+
+        let playing=false, timer=null;
+        function play(){ if(playing) return; playing=true; document.getElementById('btn-play').textContent='❚❚ 暂停'; timer=setInterval(()=>{ if(i+1>=total){ stop(); return;} next(); }, 650); }
+        function stop(){ playing=false; document.getElementById('btn-play').textContent='▷ 播放'; if(timer){clearInterval(timer); timer=null;} }
+        document.getElementById('btn-play').addEventListener('click', ()=> playing?stop():play());
+        addEventListener('keydown',(e)=>{ if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return; const k=e.key.toLowerCase(); if(k==='l') next(); else if(k==='j') prev(); else if(k==='b') restart(); else if(k==='k') (playing?stop():play()); });
+
+        // 初始状态
+        setPot(); setStep(); setStreet('Preflop'); setAnalysis(null);
+      })();
+    </script>
+  </body>
+</html>

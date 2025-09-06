@@ -204,7 +204,31 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
             actions = {"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}}
         else:
             actions = _actions_model(gs)
-    ctx = {"session_id": session_id, "hand_id": hand_id, "hud": _hud_model(s, st), "st": st, "actions": actions, "log": log}
+    # SSR: if session already ended, prepare session-end view data
+    session_ended = (s.status == "ended")
+    ended_summary = dict(s.stats or {}) if session_ended else None
+    ended_reason_text = None
+    if session_ended:
+        m = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+        ended_reason_text = m.get(s.ended_reason or "", s.ended_reason or "Ended")
+    # last hand id for replay link (best-effort)
+    last_hid = None
+    for hid, item in reversed(list(HANDS.items())):
+        if item.get("session_id") == session_id:
+            last_hid = hid
+            break
+    ctx = {
+        "session_id": session_id,
+        "hand_id": hand_id,
+        "hud": _hud_model(s, st),
+        "st": st,
+        "actions": actions,
+        "log": log,
+        "session_ended": session_ended,
+        "ended_summary": ended_summary,
+        "ended_reason_text": ended_reason_text,
+        "last_hand_id": last_hid,
+    }
     return render(request, "poker_teaching_game_ui_skeleton_htmx_tailwind.html", ctx)
 
 
@@ -233,7 +257,7 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
                 actions={"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}},
                 error_text="Hand already ended",
                 show_next_controls=True,
-                replay_url=f"/api/v1/hand/{hand_id}/replay",
+                replay_url=f"/api/v1/ui/replay/{hand_id}",
                 log_items=_log_items(gs),
             )
             status_label = "409"
@@ -279,7 +303,7 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
             st=st,
             actions=actions,
             show_next_controls=hand_over,
-            replay_url=f"/api/v1/hand/{hand_id}/replay" if hand_over else None,
+            replay_url=f"/api/v1/ui/replay/{hand_id}" if hand_over else None,
             log_items=_log_items(gs),
         )
         return _oob_response(html, route=t0_route, method=method, status_label=status_label)
@@ -297,13 +321,36 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         seed = int(seed_raw) if (seed_raw and seed_raw.isdigit()) else None
         s = get_object_or_404(Session, session_id=session_id)
 
+        # Idempotent: already ended
+        if s.status == "ended":
+            # Render session end card; no Push-Url
+            ended_summary = dict(s.stats or {})
+            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            html = render_to_string(
+                "ui/_session_end.html",
+                {
+                    "session_id": s.session_id,
+                    "summary": ended_summary,
+                    "ended_reason_text": reason_map.get(s.ended_reason or "", s.ended_reason or "Ended"),
+                    "last_hand_id": None,
+                },
+                request=request,
+            )
+            try:
+                metrics.inc_api_error("ui_next", "t409_session_ended")
+            except Exception:
+                pass
+            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+
         # Find latest completed hand for this session
         latest_gs, latest_cfg = None, None
+        latest_hid = None
         for hid, item in reversed(list(HANDS.items())):
             if item.get("session_id") == session_id:
                 gs = item.get("gs")
                 latest_gs = gs
                 latest_cfg = item.get("cfg")
+                latest_hid = hid
                 if getattr(gs, "street", None) == "complete":
                     break
         if latest_gs is None or getattr(latest_gs, "street", None) != "complete":
@@ -317,6 +364,30 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         from poker_core.state_hu import start_hand_with_carry as _start_hand_with_carry
 
         cfg_for_next = latest_cfg or s.config
+        # Max-hands end (before planning next)
+        try:
+            max_hands = int((s.config or {}).get("max_hands", 0) or 0)
+        except Exception:
+            max_hands = 0
+        if max_hands and int(s.hand_counter or 0) >= max_hands:
+            from .views_play import finalize_session
+            summary = finalize_session(s, latest_gs, "max_hands", last_hand_id=latest_hid)
+            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            html = render_to_string(
+                "ui/_session_end.html",
+                {
+                    "session_id": s.session_id,
+                    "summary": summary,
+                    "ended_reason_text": reason_map.get("max_hands"),
+                    "last_hand_id": None,
+                },
+                request=request,
+            )
+            try:
+                metrics.inc_api_error("ui_next", "t409_session_ended")
+            except Exception:
+                pass
+            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
         sv = SessionView(
             session_id=s.session_id,
             button=int(s.button),
@@ -335,10 +406,30 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         # 启动新手并注册
         import uuid
         new_hid = str(uuid.uuid4())
-        gs_new = _start_hand_with_carry(
-            cfg_for_next, session_id=session_id, hand_id=new_hid,
-            button=plan.next_button, stacks=plan.stacks, seed=plan.seed,
-        )
+        try:
+            gs_new = _start_hand_with_carry(
+                cfg_for_next, session_id=session_id, hand_id=new_hid,
+                button=plan.next_button, stacks=plan.stacks, seed=plan.seed,
+            )
+        except ValueError:
+            from .views_play import finalize_session
+            summary = finalize_session(s, latest_gs, "bust", last_hand_id=latest_hid)
+            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            html = render_to_string(
+                "ui/_session_end.html",
+                {
+                    "session_id": s.session_id,
+                    "summary": summary,
+                    "ended_reason_text": reason_map.get("bust"),
+                    "last_hand_id": None,
+                },
+                request=request,
+            )
+            try:
+                metrics.inc_api_error("ui_next", "t409_session_ended")
+            except Exception:
+                pass
+            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
         HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
 
         # 片段渲染
@@ -346,10 +437,8 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         actions = _actions_model(gs_new)
         html = _render_oob_fragments(request, session=s, st=st, actions=actions, show_next_controls=False, hand_id_for_form=new_hid, coach_hand_id=new_hid, log_items=_log_items(gs_new))
         resp = _oob_response(html, route=t0_route, method=method, status_label=status_label)
-        try:
-            resp["HX-Push-Url"] = f"/api/v1/ui/game/{session_id}/{new_hid}"
-        except Exception:
-            pass
+        # Only push URL when a new hand is successfully started
+        resp["HX-Push-Url"] = f"/api/v1/ui/game/{session_id}/{new_hid}"
         return resp
     finally:
         pass
@@ -448,6 +537,34 @@ def _oob_response(html: str, *, route: str, method: str, status_label: str) -> H
     except Exception:
         pass
     return HttpResponse(html, content_type="text/html; charset=utf-8", status=200)
+
+
+@require_http_methods(["GET"])
+def ui_replay_view(request: HttpRequest, hand_id: str) -> HttpResponse:
+    """Render replay page for a completed hand."""
+    try:
+        # Try to get replay data from database (primary source)
+        try:
+            from .models import Replay
+            obj = Replay.objects.get(hand_id=hand_id)
+            replay_data = obj.payload
+        except Replay.DoesNotExist:
+            # Fallback: try to get from memory if available
+            replay_data = HANDS.get(hand_id, {}).get("replay_data")
+            if replay_data is None:
+                return HttpResponse("Replay not found", status=404)
+
+        # Convert replay data to JSON string for template
+        import json
+        replay_json = json.dumps(replay_data)
+
+        ctx = {
+            "hand_id": hand_id,
+            "replay_json": replay_json,
+        }
+        return render(request, "poker_teaching_replay.html", ctx)
+    except Exception as e:
+        return HttpResponse(f"Failed to load replay: {e}", status=500)
 
 
 @require_http_methods(["GET", "POST"])
