@@ -217,7 +217,7 @@ def _maybe_advance_street(gs: GameState) -> GameState:
     #       根据 HU 规则对手无法再进行新一轮下注/加注；因此在对齐后
     #       应自动发完余下公共牌直至摊牌，避免“无人可行动”卡住。
     p0, p1 = gs.players
-    if (p0.all_in or p1.all_in) and _both_satisfied(gs):
+    if (p0.all_in and p1.all_in) or ((p0.all_in or p1.all_in) and _both_satisfied(gs)):
         cur = gs
         # 连续推进直至摊牌
         while True:
@@ -295,6 +295,20 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
         pay = min(me.stack, to_call)
         me = _replace_player(me, stack=me.stack - pay, invested_street=me.invested_street + pay, all_in=(me.stack - pay == 0))
         gs = _update_player(gs, actor, me)
+
+        # 若不足额跟注（pay < to_call），退还对手未被匹配的部分
+        if pay < to_call:
+            over = to_call - pay
+            opp = gs.players[1-actor]
+            # 确保不退还超过对手已投资的金额（防御性编程）
+            actual_refund = min(over, opp.invested_street)
+            opp = _replace_player(opp, invested_street=opp.invested_street - actual_refund, stack=opp.stack + actual_refund)
+            gs = _update_player(gs, 1-actor, opp)
+            gs.events.append({"t":"call_short", "who":actor, "amt":pay, "refund":actual_refund})
+            gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+            return _maybe_advance_street(gs)
+
+        # 精确跟注或常规跟注
         gs.events.append({"t":"call", "who":actor, "amt":pay})
         # call 保持本回合已有下注状态（open_bet 维持 True），并清空本轮 check 计数
         gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
