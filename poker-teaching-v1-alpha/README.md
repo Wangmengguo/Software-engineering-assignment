@@ -86,6 +86,12 @@ UI 粘合端点（HTML 片段，返回 200 + OOB；仅转译/组合，不改变�
 - `POST /api/v1/ui/coach/<hand_id>/suggest` 显式触发建议（若含金额则回填默认值；若被钳制显示胶囊提示）。
   回放页（SSR）：
  - `GET  /api/v1/ui/replay/<hand_id>`：服务器组装时间轴与基础数据；前端仅本地播放；播放时按钮带 UI 锁。
+ - `POST /api/v1/ui/prefs/teach` 切换教学模式（server truth 存于 `request.session['teach']`，默认开启 Teach）。
+  - 行为：返回 OOB 片段刷新 对手手牌区域 与开关按钮本身；不改变 URL。
+  - 规则（摊牌展示）：仅当满足以下任一条件时，才展示对手底牌：
+    1) Teach=ON；或
+    2) 本手以摊牌结束（事件含 `showdown`/`win_showdown`）。
+    若以弃牌结束（事件含 `win_fold`），即便 `street == 'complete'`，也不展示对手底牌。
 
 — 怎么测（Test） —
 
@@ -115,6 +121,7 @@ coverage run -m pytest && coverage report --include "packages/poker_core/*"
     - `_amount.html`（金额输入显示/范围/默认值）
     - `_coach.html`（建议/理由）
     - `_coach_trigger.html`（“Get Suggestion”按钮）
+    - `_teach_toggle.html`（对局页头部 Teach/Practice 开关，触发 `POST /api/v1/ui/prefs/teach`）
     - `_session_end.html`（会话结束卡片：Hands / Stacks / PnL / Reason + 按钮）
   - 回放 UI：`apps/web-django/api/views_ui.py::ui_replay_view` + `templates/poker_teaching_replay.html`
     - 数据源优先内存 REPLAYS，其次 DB `Replay`；与 `/hand/<hid>/replay` 保持一致。
@@ -149,3 +156,5 @@ Tips
 
 - 自定义盲注：在 `POST /api/v1/session/start` 传 `{sb, bb}`。
 - 常见 409：非当前行动者或手牌已结束；先 `GET /hand/state` 查看 `to_act/street` 再操作。
+- 教学/实战切换：对局页头部提供 Teach 开关按钮（默认 ON）。切换即发起 `POST /api/v1/ui/prefs/teach`，
+  服务端写入会话首选项，随后用 OOB 片段刷新 seats 与开关；SSR 与 HTMX 路径遵循同一规则，无需前端推断。

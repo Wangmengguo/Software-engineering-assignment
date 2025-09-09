@@ -88,6 +88,30 @@ def _is_hand_over(gs) -> bool:
     return street in {"complete", "showdown_complete"} or bool(getattr(gs, "is_over", False))
 
 
+def _ended_by_showdown(gs) -> bool:
+    """判断本手是否以摊牌结束。
+
+    依据领域层事件：存在 showdown 或 win_showdown 事件且 street==complete。
+    若为 win_fold 结束则不算摊牌。
+    """
+    try:
+        if getattr(gs, "street", None) != "complete":
+            return False
+        evs = getattr(gs, "events", None) or []
+        # 优先判断 showdown / win_showdown
+        for e in evs:
+            t = e.get("t")
+            if t in ("showdown", "win_showdown"):
+                return True
+        # 明确存在 win_fold 则认为非摊牌
+        for e in evs:
+            if e.get("t") == "win_fold":
+                return False
+        return False
+    except Exception:
+        return False
+
+
 def _log_items(gs) -> List[str]:
     """Build last 5 action lines: "You/Opponent + action [+amount]" (most recent first)."""
     items: List[str] = []
@@ -140,6 +164,7 @@ def _render_oob_fragments(request: HttpRequest, *,
                           hand_id_for_form: Optional[str] = None,
                           coach_hand_id: Optional[str] = None,
                           log_items: Optional[List[str]] = None,
+                          reveal_opp: Optional[bool] = None,
                           ) -> str:
     parts: List[str] = []
 
@@ -153,7 +178,8 @@ def _render_oob_fragments(request: HttpRequest, *,
     parts.append(render_to_string("ui/_board.html", {"st": st}, request=request))
 
     # Seats: stacks, per-street invested, hole cards
-    parts.append(render_to_string("ui/_seats.html", {"st": st}, request=request))
+    teach = bool(request.session.get("teach", True))
+    parts.append(render_to_string("ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": bool(reveal_opp) if reveal_opp is not None else False}, request=request))
 
     # Actions + amount
     if hand_id_for_form:
@@ -217,6 +243,14 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
         if item.get("session_id") == session_id:
             last_hid = hid
             break
+    teach = bool(request.session.get("teach", True))
+    # 计算 reveal_opp：Teach ON 或摊牌结束
+    reveal_opp = False
+    try:
+        if entry and entry.get("gs") is not None:
+            reveal_opp = bool(teach or _ended_by_showdown(entry["gs"]))
+    except Exception:
+        reveal_opp = bool(teach)
     ctx = {
         "session_id": session_id,
         "hand_id": hand_id,
@@ -224,6 +258,8 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
         "st": st,
         "actions": actions,
         "log": log,
+        "teach": teach,
+        "reveal_opp": reveal_opp,
         "session_ended": session_ended,
         "ended_summary": ended_summary,
         "ended_reason_text": ended_reason_text,
@@ -259,6 +295,7 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
                 show_next_controls=True,
                 replay_url=f"/api/v1/ui/replay/{hand_id}",
                 log_items=_log_items(gs),
+                reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
             )
             status_label = "409"
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
@@ -280,7 +317,15 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
             entry["gs"] = gs
             st = snapshot_state(gs)
             actions = _actions_model(gs)
-            html = _render_oob_fragments(request, session=s, st=st, actions=actions, error_text="Invalid action or amount (adjusted or please retry)", log_items=_log_items(gs))
+            html = _render_oob_fragments(
+                request,
+                session=s,
+                st=st,
+                actions=actions,
+                error_text="Invalid action or amount (adjusted or please retry)",
+                log_items=_log_items(gs),
+                reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
+            )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
 
         gs = _settle_if_needed(gs)
@@ -305,7 +350,47 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
             show_next_controls=hand_over,
             replay_url=f"/api/v1/ui/replay/{hand_id}" if hand_over else None,
             log_items=_log_items(gs),
+            reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
         )
+        return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+    finally:
+        pass
+
+
+@require_POST
+def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
+    """Toggle teaching mode preference (server-side truth).
+
+    Stores preference in request.session['teach'] (default True), flips it,
+    and returns OOB fragments to refresh seats and the toggle itself.
+    Showdown reveal is handled by templates based on state (street == 'complete').
+    """
+    t0_route = "ui/prefs/teach"
+    method = "POST"
+    status_label = "200"
+    try:
+        teach_prev = bool(request.session.get("teach", True))
+        teach = not teach_prev
+        request.session["teach"] = teach
+
+        hand_id = request.POST.get("hand_id") or request.GET.get("hand_id")
+        session_id = request.POST.get("session_id") or request.GET.get("session_id") or ""
+        st: Dict[str, Any] = {}
+        if hand_id:
+            entry = HANDS.get(hand_id)
+            if entry and entry.get("gs") is not None:
+                st = snapshot_state(entry["gs"])
+
+        parts: List[str] = []
+        if st:
+            try:
+                gs = entry.get("gs") if hand_id else None
+                rev = bool(teach or _ended_by_showdown(gs)) if gs is not None else bool(teach)
+            except Exception:
+                rev = bool(teach)
+            parts.append(render_to_string("ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": rev}, request=request))
+        parts.append(render_to_string("ui/_teach_toggle.html", {"teach": teach, "hand_id": hand_id or "", "session_id": session_id}, request=request))
+        html = "\n".join(parts)
         return _oob_response(html, route=t0_route, method=method, status_label=status_label)
     finally:
         pass
@@ -436,6 +521,16 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         st = snapshot_state(gs_new)
         actions = _actions_model(gs_new)
         html = _render_oob_fragments(request, session=s, st=st, actions=actions, show_next_controls=False, hand_id_for_form=new_hid, coach_hand_id=new_hid, log_items=_log_items(gs_new))
+        # 方案A：在开始新手后，同步更新 Teach 按钮（带上新的 hand_id）
+        try:
+            teach = bool(request.session.get("teach", True))
+            html = html + "\n" + render_to_string(
+                "ui/_teach_toggle.html",
+                {"teach": teach, "hand_id": new_hid, "session_id": session_id},
+                request=request,
+            )
+        except Exception:
+            pass
         resp = _oob_response(html, route=t0_route, method=method, status_label=status_label)
         # Only push URL when a new hand is successfully started
         resp["HX-Push-Url"] = f"/api/v1/ui/game/{session_id}/{new_hid}"

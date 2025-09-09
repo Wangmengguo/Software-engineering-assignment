@@ -102,7 +102,7 @@
 
   <body class="min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))] antialiased">
     <!-- Layout: table left + coach right -->
-    <div class="layout-root mx-auto px-4 lg:px-6 grid gap-6 min-h-screen pb-safe" style="max-width: 900px;">
+    <div id="app-root" data-teach="{{ teach|yesno:'1,0' }}" class="layout-root mx-auto px-4 lg:px-6 grid gap-6 min-h-screen pb-safe" style="max-width: 900px;">
       <!-- Top HUD (sticky) -->
       <header
         class="sticky top-0 z-40 -mx-4 lg:-mx-6 px-4 lg:px-6 py-3 bg-[rgb(var(--bg))]/80 backdrop-blur border-b border-[rgb(var(--border))]"
@@ -134,6 +134,7 @@
           <div class="flex items-center gap-2">
             <div id="global-error" class="hidden"></div>
             <div id="status-chip" class="chip hidden"></div>
+            {% include "ui/_teach_toggle.html" with teach=teach hand_id=hand_id session_id=session_id %}
             {% include "ui/_theme_toggle.html" %}
           </div>
         </div>
@@ -322,6 +323,15 @@
           // 重新添加动画类
           avatar.classList.add('avatar-pulse');
         });
+
+        // 同步教学模式到根容器属性（用于样式/状态）
+        try {
+          const flag = document.getElementById('teach-flag');
+          if (flag) {
+            const root = document.getElementById('app-root');
+            if (root) root.setAttribute('data-teach', flag.getAttribute('data-teach') || '');
+          }
+        } catch (_) {}
       });
     </script>
     <style>
