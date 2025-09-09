@@ -1,60 +1,70 @@
-{% comment %} Seats block (OOB) — shows stacks, per-street invested, button, and hole cards. {% endcomment %}
+{% comment %} Seats block (OOB) — stacks, per-street invested, button, and hole cards (CardMeister). {% endcomment %}
 <div id="seats" hx-swap-oob="outerHTML">
   <!-- Top seat: Opponent (index 1) -->
   <div class="absolute inset-x-4 top-4 flex items-center justify-center">
-    <div class="inline-flex items-center gap-3 card px-3 py-2">
-      <!-- Opponent Avatar: Joker -->
-      <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))] flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[rgb(var(--muted))]">
-          <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-          <path d="M5 16m0 1.5a1.5 1.5 0 0 1 1.5 -1.5h11a1.5 1.5 0 0 1 1.5 1.5v0a1.5 1.5 0 0 1 -1.5 1.5h-11a1.5 1.5 0 0 1 -1.5 -1.5z" />
-          <path d="M12 16q -2.5 -8 -6 -8q -2.5 0 -3 2c2.953 .31 3.308 3.33 4 6" />
-          <path d="M12 16q 2.5 -8 6 -8q 2.5 0 3 2c-2.953 .31 -3.308 3.33 -4 6" />
-          <path d="M9 9.5q 2 -3.5 3 -3.5t 3 3.5" />
-        </svg>
+    <div class="flex items-center justify-between card px-4 py-3" style="min-width: var(--seat-min-width); max-width: var(--seat-max-width);" aria-label="Opponent seat">
+      <!-- 左侧：头像 + 文字信息 -->
+      <div class="flex items-center" style="gap: var(--seat-gap);">
+        <!-- Opponent Avatar: King -->
+        <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))] flex items-center justify-center {% if st.to_act == 1 %}avatar-pulse{% endif %}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[rgb(var(--muted))]">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M12 6l4 6l5 -4l-2 10h-14l-2 -10l5 4z" />
+          </svg>
+        </div>
+        <div>
+          <div class="text-sm font-medium {% if st.to_act == 1 %}text-[rgb(var(--text))]{% else %}opacity-80{% endif %}">Opponent</div>
+          <div class="text-xs text-[rgb(var(--muted))]">Stack {{ st.players.1.stack|default:0 }}</div>
+          {% if st.players.1.bet|default:0 %}
+            <div class="mt-1 chip">Bet {{ st.players.1.bet }}</div>
+          {% endif %}
+        </div>
       </div>
-      <div>
-        <div class="text-sm font-medium {% if st.to_act == 1 %}text-[rgb(var(--text))]{% else %}opacity-80{% endif %}">Opponent</div>
-        <div class="text-xs text-[rgb(var(--muted))]">Stack {{ st.players.1.stack|default:0 }}</div>
-        {% if st.players.1.bet|default:0 %}
-          <div class="mt-1 chip">Bet {{ st.players.1.bet }}</div>
-        {% endif %}
+
+      <!-- 右侧：洞牌 + 庄家标志 -->
+      <div class="relative">
+        <div class="flex items-center hole-cards-container">
+          {% with hole=st.players.1.hole %}
+            {% include "ui/_card.html" with cid=hole.0 size='md' %}
+            {% include "ui/_card.html" with cid=hole.1 size='md' %}
+          {% endwith %}
+        </div>
+        {% if st.button == 1 %}<span class="chip absolute" style="top: var(--dealer-offset); right: var(--dealer-offset);">D</span>{% endif %}
       </div>
-      <div class="flex items-center space-x-1 sm:space-x-2">
-        {% with hole=st.players.1.hole %}
-          {% if hole and hole.0 %}<div class="card w-12 h-16 grid place-items-center text-sm">{{ hole.0 }}</div>{% else %}<div class="card w-12 h-16"></div>{% endif %}
-          {% if hole and hole.1 %}<div class="card w-12 h-16 grid place-items-center text-sm z-10">{{ hole.1 }}</div>{% else %}<div class="card w-12 h-16 z-10"></div>{% endif %}
-        {% endwith %}
-      </div>
-      {% if st.button == 1 %}<span class="chip">D</span>{% endif %}
     </div>
   </div>
 
   <!-- Bottom seat: You (index 0) -->
   <div class="absolute inset-x-4 bottom-4 flex items-center justify-center">
-    <div class="inline-flex items-center gap-3 card px-3 py-2">
-      <!-- Player Avatar: Carambola -->
-      <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))] flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="text-[rgb(var(--muted))]">
-          <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-          <path d="M17.108 22.085c-1.266 -.068 -2.924 -.859 -5.071 -2.355l-.04 -.027l-.037 .027c-2.147 1.497 -3.804 2.288 -5.072 2.356l-.178 .005c-2.747 0 -3.097 -2.64 -1.718 -7.244l.054 -.178l-.1 -.075c-6.056 -4.638 -5.046 -7.848 2.554 -8.066l.202 -.005l.115 -.326c1.184 -3.33 2.426 -5.085 4.027 -5.192l.156 -.005c1.674 0 2.957 1.76 4.182 5.197l.114 .326l.204 .005c7.6 .218 8.61 3.428 2.553 8.065l-.102 .075l.055 .178c1.35 4.512 1.04 7.137 -1.556 7.24l-.163 .003z" />
-        </svg>
+    <div class="flex items-center justify-between card px-4 py-3" style="min-width: var(--seat-min-width); max-width: var(--seat-max-width);" aria-label="Your seat">
+      <!-- 左侧：头像 + 文字信息 -->
+      <div class="flex items-center" style="gap: var(--seat-gap);">
+        <!-- Player Avatar: Carambola -->
+        <div class="w-7 h-7 rounded-full bg-[rgb(var(--border))] flex items-center justify-center {% if st.to_act == 0 %}avatar-pulse{% endif %}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="text-[rgb(var(--muted))]">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M17.108 22.085c-1.266 -.068 -2.924 -.859 -5.071 -2.355l-.04 -.027l-.037 .027c-2.147 1.497 -3.804 2.288 -5.072 2.356l-.178 .005c-2.747 0 -3.097 -2.64 -1.718 -7.244l.054 -.178l-.1 -.075c-6.056 -4.638 -5.046 -7.848 2.554 -8.066l.202 -.005l.115 -.326c1.184 -3.33 2.426 -5.085 4.027 -5.192l.156 -.005c1.674 0 2.957 1.76 4.182 5.197l.114 .326l.204 .005c7.6 .218 8.61 3.428 2.553 8.065l-.102 .075l.055 .178c1.35 4.512 1.04 7.137 -1.556 7.24l-.163 .003z" />
+          </svg>
+        </div>
+        <div>
+          <div class="text-sm font-semibold {% if st.to_act == 0 %}text-[rgb(var(--text))]{% else %}opacity-80{% endif %}">You</div>
+          <div class="text-xs text-[rgb(var(--muted))]">Stack {{ st.players.0.stack|default:0 }}</div>
+          {% if st.players.0.bet|default:0 %}
+            <div class="mt-1 chip">Bet {{ st.players.0.bet }}</div>
+          {% endif %}
+        </div>
       </div>
-      <div>
-        <div class="text-sm font-semibold {% if st.to_act == 0 %}text-[rgb(var(--text))]{% else %}opacity-80{% endif %}">You</div>
-        <div class="text-xs text-[rgb(var(--muted))]">Stack {{ st.players.0.stack|default:0 }}</div>
-        {% if st.players.0.bet|default:0 %}
-          <div class="mt-1 chip">Bet {{ st.players.0.bet }}</div>
-        {% endif %}
+
+      <!-- 右侧：洞牌 + 庄家标志 -->
+      <div class="relative">
+        <div class="flex items-center hole-cards-container">
+          {% with hole=st.players.0.hole %}
+            {% include "ui/_card.html" with cid=hole.0 size='md' %}
+            {% include "ui/_card.html" with cid=hole.1 size='md' %}
+          {% endwith %}
+        </div>
+        {% if st.button == 0 %}<span class="chip absolute" style="top: var(--dealer-offset); right: var(--dealer-offset);">D</span>{% endif %}
       </div>
-      <div class="flex items-center space-x-1 sm:space-x-2">
-        {% with hole=st.players.0.hole %}
-          {% if hole and hole.0 %}<div class="card w-12 h-16 grid place-items-center text-sm">{{ hole.0 }}</div>{% else %}<div class="card w-12 h-16"></div>{% endif %}
-          {% if hole and hole.1 %}<div class="card w-12 h-16 grid place-items-center text-sm z-10">{{ hole.1 }}</div>{% else %}<div class="card w-12 h-16 z-10"></div>{% endif %}
-        {% endwith %}
-      </div>
-      {% if st.button == 0 %}<span class="chip">D</span>{% endif %}
     </div>
   </div>
 </div>
-

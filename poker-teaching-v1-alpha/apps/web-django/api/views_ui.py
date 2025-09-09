@@ -468,6 +468,8 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 st=st,
                 actions={"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}},
                 error_text="Hand already ended",
+                show_next_controls=True,  # 添加这个参数，让UI显示next hands和replay按钮
+                replay_url=f"/api/v1/ui/replay/{hand_id}",  # 添加replay URL
                 log_items=_log_items(gs),
             )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)

@@ -6,7 +6,7 @@
     <title>Poker Teaching — Game UI</title>
 
     <!-- Tailwind CDN (MVP 方便接入；生产建议本地构建) -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/vendor/tailwind/tailwindcss.min.js"></script>
     <script>
       tailwind.config = {
         theme: {
@@ -21,8 +21,8 @@
     </script>
 
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-    <script src="https://unpkg.com/htmx.org/dist/ext/json-enc.js"></script>
+    <script src="/static/vendor/htmx/htmx.min.js"></script>
+    <script src="/static/vendor/htmx/json-enc.js"></script>
 
     <!-- Design tokens: functional minimalism (avoid green) -->
     <style>
@@ -45,6 +45,22 @@
         --info: 59 130 246; /* blue-500 */
         --warn: 245 158 11; /* amber-500 */
         --danger: 239 68 68; /* red-500 */
+
+        /* Card dimensions - 自适应 */
+        --card-sm: clamp(52px, 6.0vw, 64px); /* 洞牌（窄屏） */
+        --card-md: clamp(60px, 7.2vw, 80px); /* Board 默认 */
+        --card-lg: clamp(72px, 9.0vw, 96px); /* Hero/放大态 */
+
+        /* Layout spacing - 自适应 */
+        --board-gap: clamp(8px, 1.2vw, 12px); /* Board卡牌间距 */
+        --hole-overlap: clamp(-12px, -1.4vw, -8px); /* 洞牌重叠间距 */
+
+        /* Seat layout - 自适应 */
+        --seat-min-width: clamp(280px, 35vw, 320px); /* 角色栏最小宽度 */
+        --seat-max-width: clamp(320px, 45vw, 500px); /* 角色栏最大宽度 */
+        --seat-gap: clamp(12px, 2vw, 20px); /* 角色栏内容间距 */
+        --seat-spacer: clamp(20px, 3vw, 60px); /* 左右内容间距 - 优化版 */
+        --dealer-offset: clamp(-8px, -1vw, -12px); /* 庄家标志偏移 */
       }
 
       [data-theme="dark"] {
@@ -123,7 +139,7 @@
         </div>
       </header>
 
-      <div id="aria-next" aria-live="polite" class="sr-only">Next to act: {{hud.next_role}}</div>
+      <div id="aria-next" aria-live="polite" class="sr-only">{{hud.next_role}}</div>
 
       <!-- Table area: simplified table layout -->
       <main class="space-y-4" aria-label="Game Table">
@@ -289,16 +305,28 @@
       // Re-initialize after HTMX swaps
       document.addEventListener('htmx:afterSwap', syncAmountInputs);
 
+      // 重新触发动画 - 确保头像脉冲动画在HTMX更新后正确重启
+      document.addEventListener('htmx:afterSwap', () => {
+        const seatsContainer = document.getElementById('seats');
+        if (!seatsContainer) return;
+
+        // 查找有动画类的头像
+        const animatedAvatars = seatsContainer.querySelectorAll('.avatar-pulse');
+        animatedAvatars.forEach(avatar => {
+          // 临时移除动画类以强制重启
+          avatar.classList.remove('avatar-pulse');
+
+          // 强制重排
+          void avatar.offsetHeight;
+
+          // 重新添加动画类
+          avatar.classList.add('avatar-pulse');
+        });
+      });
     </script>
     <style>
       /* Safe area padding to avoid fixed footer overlap */
       .pb-safe { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
-
-
-      /* Clean board transitions */
-      #board {
-        transition: opacity 0.2s ease;
-      }
       /* Landscape/short viewport: compact layout */
       @media (orientation: landscape) {
         #table-card { aspect-ratio: auto; height: min(68vh, calc(100vh - 200px)); }
@@ -356,19 +384,40 @@
           margin-top: 0.125rem !important; /* 2px, 更小的行间距 */
         }
       }
-      /* Mobile optimization for hole cards */
-      @media (max-width: 640px) {
-        .hole-cards-mobile {
-          gap: 0.75rem !important; /* 12px gap for mobile */
+      /* Mobile optimization - 移除硬编码，让clamp()自动处理 */
+
+      /* Hole cards container - 优化重叠实现 */
+      .hole-cards-container playing-card:nth-child(2) {
+        margin-left: var(--hole-overlap);
+      }
+
+      /* 头像克制呼吸环动画 - 行动提示效果 */
+      @keyframes avatar-pulse-ring {
+        0% {
+          box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.15);
         }
-        .hole-card-mobile {
-          width: 3rem !important; /* 48px width for mobile */
-          height: 4rem !important; /* 64px height for mobile */
+        50% {
+          box-shadow: 0 0 0 6px rgba(79, 70, 229, 0.35);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.15);
         }
       }
+
+      /* 头像脉冲动画类 */
+      .avatar-pulse {
+        animation: avatar-pulse-ring 2s ease-in-out infinite !important;
+        border: 2px solid rgb(79, 70, 229) !important;
+        position: relative !important;
+        z-index: 1 !important;
+        border-radius: 50% !important; /* 确保圆角 */
+      }
+
     </style>
 
     <!-- Theme toggle JavaScript -->
     <script src="/static/js/theme-toggle.js"></script>
+    <!-- CardMeister Web Component for card visuals -->
+    <script src="/static/vendor/cardmeister/elements.cardmeister.min.js"></script>
   </body>
 </html>

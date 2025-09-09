@@ -189,6 +189,7 @@ def _persist_replay(hand_id: str, gs) -> None:
             # 游戏数据
             "events": getattr(gs, "events", []),
             "board": list(getattr(gs, "board", [])),
+            "button": getattr(gs, "button", 0),  # 庄位信息
             "winner": outcome.get("winner") if outcome else None,
             "best5": outcome.get("best5") if outcome else None,
 
