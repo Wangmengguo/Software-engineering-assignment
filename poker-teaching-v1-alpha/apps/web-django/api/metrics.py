@@ -1,11 +1,19 @@
 # apps/web_django/api/metrics.py
 from __future__ import annotations
-from typing import Optional
-from django.http import HttpResponse
+
 import logging
 
+from django.http import HttpResponse
+
 try:
-    from prometheus_client import Histogram, Counter, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        REGISTRY,
+        Counter,
+        Histogram,
+        generate_latest,
+    )
+
     log = logging.getLogger(__name__)
 
     # --- helpers: get_or_create，避免重复注册报错 ---
@@ -23,30 +31,42 @@ try:
             return REGISTRY._names_to_collectors[name]  # type: ignore[attr-defined]
 
     # --- Suggest 专用指标（标签维度与视图保持一致） ---
-    SUGGEST_LATENCY = _get_or_create_hist("suggest_latency_seconds", "Suggest latency", ["policy", "street"])
-    SUGGEST_ERRORS  = _get_or_create_counter("suggest_errors_total",   "Suggest errors",   ["type", "street"])
-    SUGGEST_ACTION  = _get_or_create_counter("suggest_action_total",   "Suggested actions",["policy", "street", "action"])
-    SUGGEST_CLAMPED = _get_or_create_counter("suggest_clamped_total",  "Amount clamped",   ["policy", "street"])
-    SUGGEST_NOLEGAL = _get_or_create_counter("suggest_no_legal_actions_total", "No legal actions", ["policy", "street"])
+    SUGGEST_LATENCY = _get_or_create_hist(
+        "suggest_latency_seconds", "Suggest latency", ["policy", "street"]
+    )
+    SUGGEST_ERRORS = _get_or_create_counter(
+        "suggest_errors_total", "Suggest errors", ["type", "street"]
+    )
+    SUGGEST_ACTION = _get_or_create_counter(
+        "suggest_action_total", "Suggested actions", ["policy", "street", "action"]
+    )
+    SUGGEST_CLAMPED = _get_or_create_counter(
+        "suggest_clamped_total", "Amount clamped", ["policy", "street"]
+    )
+    SUGGEST_NOLEGAL = _get_or_create_counter(
+        "suggest_no_legal_actions_total", "No legal actions", ["policy", "street"]
+    )
 
     # --- API 通用指标 ---
-    API_LATENCY     = _get_or_create_hist("api_latency_seconds",  "API latency",  ["route", "method", "status"])
-    API_ERRORS      = _get_or_create_counter("api_errors_total",  "API errors",   ["route", "kind"])
+    API_LATENCY = _get_or_create_hist(
+        "api_latency_seconds", "API latency", ["route", "method", "status"]
+    )
+    API_ERRORS = _get_or_create_counter("api_errors_total", "API errors", ["route", "kind"])
 
     # --- Suggest API 封装 ---
-    def observe_latency(policy: str, street: Optional[str], seconds: float):
+    def observe_latency(policy: str, street: str | None, seconds: float):
         SUGGEST_LATENCY.labels(policy or "unknown", street or "unknown").observe(seconds)
 
-    def inc_error(err_type: str, street: Optional[str] = None):
+    def inc_error(err_type: str, street: str | None = None):
         SUGGEST_ERRORS.labels(err_type or "unknown", street or "unknown").inc()
 
-    def inc_action(policy: str, action: str, street: Optional[str] = None):
+    def inc_action(policy: str, action: str, street: str | None = None):
         SUGGEST_ACTION.labels(policy or "unknown", street or "unknown", action or "unknown").inc()
 
-    def inc_clamped(policy: str, street: Optional[str] = None):
+    def inc_clamped(policy: str, street: str | None = None):
         SUGGEST_CLAMPED.labels(policy or "unknown", street or "unknown").inc()
 
-    def inc_no_legal_actions(policy: str, street: Optional[str] = None):
+    def inc_no_legal_actions(policy: str, street: str | None = None):
         SUGGEST_NOLEGAL.labels(policy or "unknown", street or "unknown").inc()
 
     # --- API 通用封装 ---
@@ -61,9 +81,13 @@ try:
         return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
     # --- 游戏流程扩展指标（可选） ---
-    SESSION_STARTS = _get_or_create_counter("session_starts_total", "Session creation count", ["status"])
-    HAND_STARTS    = _get_or_create_counter("hand_starts_total",    "Hand creation count",    ["status"])
-    HAND_ACTIONS   = _get_or_create_counter("hand_actions_total",   "Hand actions count",     ["action", "street"])
+    SESSION_STARTS = _get_or_create_counter(
+        "session_starts_total", "Session creation count", ["status"]
+    )
+    HAND_STARTS = _get_or_create_counter("hand_starts_total", "Hand creation count", ["status"])
+    HAND_ACTIONS = _get_or_create_counter(
+        "hand_actions_total", "Hand actions count", ["action", "street"]
+    )
 
     def inc_session_start(status: str = "success"):
         SESSION_STARTS.labels(status or "success").inc()
@@ -71,20 +95,35 @@ try:
     def inc_hand_start(status: str = "success"):
         HAND_STARTS.labels(status or "success").inc()
 
-    def inc_hand_action(action: str, street: Optional[str] = None):
+    def inc_hand_action(action: str, street: str | None = None):
         HAND_ACTIONS.labels(action or "unknown", street or "unknown").inc()
 
 except Exception as e:  # 无 Prometheus 或初始化失败时降级
     logging.getLogger(__name__).exception("Prometheus metrics init failed: %s", e)
 
-    def observe_latency(policy: str, street: Optional[str], seconds: float): pass
-    def inc_error(err_type: str, street: Optional[str] = None): pass
-    def inc_action(policy: str, action: str, street: Optional[str] = None): pass
-    def inc_clamped(policy: str, street: Optional[str] = None): pass
-    def inc_no_legal_actions(policy: str, street: Optional[str] = None): pass
-    def observe_request(route: str, method: str, status: str, seconds: float): pass
-    def inc_api_error(route: str, kind: str): pass
+    def observe_latency(policy: str, street: str | None, seconds: float):
+        pass
+
+    def inc_error(err_type: str, street: str | None = None):
+        pass
+
+    def inc_action(policy: str, action: str, street: str | None = None):
+        pass
+
+    def inc_clamped(policy: str, street: str | None = None):
+        pass
+
+    def inc_no_legal_actions(policy: str, street: str | None = None):
+        pass
+
+    def observe_request(route: str, method: str, status: str, seconds: float):
+        pass
+
+    def inc_api_error(route: str, kind: str):
+        pass
 
     def prometheus_view(_request):
         # 用 200 文本而不是 501，避免采集器报警刷屏；也更利于排查
-        return HttpResponse("prometheus metrics unavailable\n", content_type="text/plain", status=200)
+        return HttpResponse(
+            "prometheus metrics unavailable\n", content_type="text/plain", status=200
+        )

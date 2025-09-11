@@ -1,4 +1,11 @@
-from poker_core.state_hu import start_session, start_hand, legal_actions, apply_action, settle_if_needed, BB
+from poker_core.state_hu import (
+    BB,
+    apply_action,
+    legal_actions,
+    settle_if_needed,
+    start_hand,
+    start_session,
+)
 
 
 def goto_flop(gs):
@@ -84,10 +91,10 @@ def test_unlimited_raises_multiple_times():
     gs = start_hand(cfg, session_id="s1", hand_id="h6", button=0, seed=12)
     gs = goto_flop(gs)
     # 连续多次加注（不受 cap 限制）
-    gs = apply_action(gs, "bet", amount=2)   # last_raise_size=2
-    gs = apply_action(gs, "raise", amount=2) # 1st raise，增量=2
-    gs = apply_action(gs, "raise", amount=2) # 2nd raise，增量=2
-    gs = apply_action(gs, "raise", amount=2) # 3rd raise，增量=2
+    gs = apply_action(gs, "bet", amount=2)  # last_raise_size=2
+    gs = apply_action(gs, "raise", amount=2)  # 1st raise，增量=2
+    gs = apply_action(gs, "raise", amount=2)  # 2nd raise，增量=2
+    gs = apply_action(gs, "raise", amount=2)  # 3rd raise，增量=2
     # 仍未到上限（无限注），下一手玩家应仍可选择 call 或继续加注
     acts = set(legal_actions(gs))
     assert "call" in acts

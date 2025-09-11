@@ -50,7 +50,8 @@ TEMPLATES = [
 WSGI_APPLICATION = "web.wsgi.application"
 
 # Database: PostgreSQL if DATABASE_URL provided, else SQLite
-from urllib.parse import urlparse
+from urllib.parse import urlparse  # noqa: E402
+
 db_url = os.environ.get("DATABASE_URL", "").strip()
 if db_url:
     parsed = urlparse(db_url)

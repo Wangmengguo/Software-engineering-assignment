@@ -1,18 +1,26 @@
 from django.urls import path
-from .views_api import deal_hand_api, get_replay_api, metrics_api
 
+from . import metrics
+from .views_api import deal_hand_api, get_replay_api, metrics_api
 from .views_play import (
-    session_start_api,
+    hand_act_api,
+    hand_auto_step_api,
     hand_start_api,
     hand_state_api,
-    hand_act_api,
-    session_state_api,
     session_next_api,
-    hand_auto_step_api,
+    session_start_api,
+    session_state_api,
 )
 from .views_suggest import SuggestView
-from .views_ui import ui_hand_act, ui_session_next, ui_coach_suggest, ui_game_view, ui_start, ui_replay_view, ui_toggle_teach
-from . import metrics
+from .views_ui import (
+    ui_coach_suggest,
+    ui_game_view,
+    ui_hand_act,
+    ui_replay_view,
+    ui_session_next,
+    ui_start,
+    ui_toggle_teach,
+)
 
 urlpatterns = [
     path("table/deal", deal_hand_api, name="deal"),
@@ -22,7 +30,6 @@ urlpatterns = [
     path("hand/<str:hand_id>/replay", get_replay_api, name="hand_replay"),
     path("metrics", metrics_api, name="metrics"),
     path("metrics/prometheus", metrics.prometheus_view, name="metrics_prom"),
-
     path("session/start", session_start_api, name="session_start"),
     path("hand/start", hand_start_api, name="hand_start"),
     path("hand/state/<str:hand_id>", hand_state_api, name="hand_state"),

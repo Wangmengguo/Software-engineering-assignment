@@ -1,8 +1,7 @@
 import pytest
-
-from poker_core.suggest.types import Observation, PolicyConfig
-from poker_core.suggest.policy import policy_preflop_v0, policy_postflop_v0_3
 from poker_core.domain.actions import LegalAction
+from poker_core.suggest.policy import policy_postflop_v0_3, policy_preflop_v0
+from poker_core.suggest.types import Observation, PolicyConfig
 
 
 def _obs(**kw):
@@ -61,10 +60,13 @@ def test_postflop_flop_min_probe_bet():
     assert any(r["code"] == "PL_PROBE_BET" for r in rationale)
 
 
-@pytest.mark.parametrize("tags,hand_class,expect_call", [
-    ([], "weak", True),                     # 0.318 <= 0.33 → 跟注
-    (["pair"], "pair", True),              # 范围内阈值更宽 0.40 → 跟注
-])
+@pytest.mark.parametrize(
+    "tags,hand_class,expect_call",
+    [
+        ([], "weak", True),  # 0.318 <= 0.33 → 跟注
+        (["pair"], "pair", True),  # 范围内阈值更宽 0.40 → 跟注
+    ],
+)
 def test_postflop_call_by_pot_odds(tags, hand_class, expect_call):
     acts = [
         LegalAction(action="call", to_call=140),
@@ -75,4 +77,3 @@ def test_postflop_call_by_pot_odds(tags, hand_class, expect_call):
     suggested, rationale, policy = policy_postflop_v0_3(obs, PolicyConfig())
     assert policy == "postflop_v0_3"
     assert suggested["action"] == ("call" if expect_call else "fold")
-

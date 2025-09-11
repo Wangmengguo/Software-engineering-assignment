@@ -8,12 +8,16 @@
 
 import os
 from functools import lru_cache
+
 from .interfaces import HandEvaluator
 from .simple_fallback import SimpleFallbackEvaluator
 
+
 def _new_pokerkit() -> HandEvaluator:
     from .pokerkit_adapter import PokerKitEvaluator
+
     return PokerKitEvaluator()
+
 
 @lru_cache(maxsize=1)
 def get_evaluator() -> HandEvaluator:

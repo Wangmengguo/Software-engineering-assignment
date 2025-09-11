@@ -1,9 +1,10 @@
 # packages/poker_core/session_flow.py
 from __future__ import annotations
-from typing import Optional
-from poker_core.session_types import SessionView, NextHandPlan
 
-def next_hand(session: SessionView, last_gs, seed: Optional[int] = None) -> NextHandPlan:
+from poker_core.session_types import NextHandPlan, SessionView
+
+
+def next_hand(session: SessionView, last_gs, seed: int | None = None) -> NextHandPlan:
     """
     基于 “对局会话视图 + 上一手已complete的gs” 规划下一手：
     - 按会话规则轮转按钮

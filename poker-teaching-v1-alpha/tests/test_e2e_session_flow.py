@@ -1,13 +1,17 @@
 # tests/test_e2e_session_flow.py
 import json
+
 import pytest
 from django.test import Client
+
 
 def _post(c: Client, url: str, payload: dict):
     return c.post(url, data=json.dumps(payload), content_type="application/json")
 
+
 def _get_json(c: Client, url: str):
     return c.get(url).json()
+
 
 def _total_assets(hand_state: dict) -> int:
     """两侧栈 + 彩池 + 本街投资，总和应恒定（无抽水的简化不变量）"""
@@ -17,18 +21,24 @@ def _total_assets(hand_state: dict) -> int:
     bets = sum(int(p.get("bet", 0)) for p in players)
     return stacks + pot + bets
 
+
 def _players_stacks(hand_state: dict):
     players = hand_state.get("players", [])
     return [int(players[0]["stack"]), int(players[1]["stack"])]
 
+
 def _prefer_action(legal_actions):
     """尽量用 check / call 推进到摊牌，必要时再 fold"""
     la = set(legal_actions or [])
-    if "check" in la: return {"action": "check"}
-    if "call" in la:  return {"action": "call"}
-    if "fold" in la:  return {"action": "fold"}
+    if "check" in la:
+        return {"action": "check"}
+    if "call" in la:
+        return {"action": "call"}
+    if "fold" in la:
+        return {"action": "fold"}
     # 极端情况兜底
     return {"action": list(la)[0]} if la else {"action": "check"}
+
 
 @pytest.mark.django_db
 def test_e2e_session_next_carry_rotate_counter_conserve():
@@ -36,7 +46,9 @@ def test_e2e_session_next_carry_rotate_counter_conserve():
 
     # --- 1) 开局：自定义 sb/bb，便于验证贯穿 ---
     init_stack, sb, bb = 200, 5, 10
-    s_resp = _post(c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}).json()
+    s_resp = _post(
+        c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}
+    ).json()
     sid = s_resp["session_id"]
 
     # 对局状态（记下按钮与手数）
@@ -105,17 +117,21 @@ def test_e2e_session_next_carry_rotate_counter_conserve():
     assert ss_after["bb"] == bb, "session state 的 bb 应等于初始化值"
 
     # 校验 current_hand_id：应等于新手 hand_id
-    assert ss_after["current_hand_id"] == hid2, "session state 的 current_hand_id 应等于新手 hand_id"
+    assert (
+        ss_after["current_hand_id"] == hid2
+    ), "session state 的 current_hand_id 应等于新手 hand_id"
 
     # 校验 stacks_after_blinds：应等于新手 state.players 的 stack
-    assert ss_after["stacks_after_blinds"] == _players_stacks(st2), "stacks_after_blinds 应等于新手两侧栈"
+    assert ss_after["stacks_after_blinds"] == _players_stacks(
+        st2
+    ), "stacks_after_blinds 应等于新手两侧栈"
 
     # 校验 carry-over stacks：DB 中的 stacks 应等于第一手结束时的 end_stacks（承接栈为扣盲前）
     assert ss_after["stacks"] == end_stacks, "DB 中的 stacks 应等于第一手结束时的 end_stacks"
 
     # 延续筹码：新手开局后的玩家栈 = 第一手结束的栈 - （对应盲注）
     new_stacks = _players_stacks(st2)
-    sb_index = btn_after            # 我们的规则：按钮位发 SB
+    sb_index = btn_after  # 我们的规则：按钮位发 SB
     bb_index = 1 - btn_after
 
     assert end_stacks[sb_index] == new_stacks[sb_index] + sb, "SB 位应扣除 sb"
@@ -132,7 +148,9 @@ def test_e2e_session_fold_early_end():
 
     # --- 1) 开局：自定义 sb/bb ---
     init_stack, sb, bb = 200, 5, 10
-    s_resp = _post(c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}).json()
+    s_resp = _post(
+        c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}
+    ).json()
     sid = s_resp["session_id"]
 
     # 对局状态（记下按钮与手数）
@@ -156,9 +174,8 @@ def test_e2e_session_fold_early_end():
     # 第一手：按钮位（SB）先行动，选择 fold
     body = _get_json(c, f"/api/v1/hand/state/{hid1}")
     st = body["state"]
-    legal = body["legal_actions"]
     assert _total_assets(st) == base_total  # 守恒检查
-    
+
     # 按钮位选择 fold
     act = {"action": "fold"}
     r = _post(c, f"/api/v1/hand/act/{hid1}", act).json()
@@ -196,17 +213,21 @@ def test_e2e_session_fold_early_end():
     assert ss_after["bb"] == bb, "session state 的 bb 应等于初始化值"
 
     # 校验 current_hand_id：应等于新手 hand_id
-    assert ss_after["current_hand_id"] == hid2, "session state 的 current_hand_id 应等于新手 hand_id"
+    assert (
+        ss_after["current_hand_id"] == hid2
+    ), "session state 的 current_hand_id 应等于新手 hand_id"
 
     # 校验 stacks_after_blinds：应等于新手 state.players 的 stack
-    assert ss_after["stacks_after_blinds"] == _players_stacks(st2), "stacks_after_blinds 应等于新手两侧栈"
+    assert ss_after["stacks_after_blinds"] == _players_stacks(
+        st2
+    ), "stacks_after_blinds 应等于新手两侧栈"
 
     # 校验 carry-over stacks：DB 中的 stacks 应等于第一手结束时的 end_stacks（承接栈为扣盲前）
     assert ss_after["stacks"] == end_stacks, "DB 中的 stacks 应等于第一手结束时的 end_stacks"
 
     # 延续筹码：新手开局后的玩家栈 = 第一手结束的栈 - （对应盲注）
     new_stacks = _players_stacks(st2)
-    sb_index = btn_after            # 我们的规则：按钮位发 SB
+    sb_index = btn_after  # 我们的规则：按钮位发 SB
     bb_index = 1 - btn_after
 
     assert end_stacks[sb_index] == new_stacks[sb_index] + sb, "SB 位应扣除 sb"
@@ -223,7 +244,9 @@ def test_e2e_session_carry_stacks_smaller_than_blinds_error():
 
     # --- 1) 开局：设置较大的盲注 ---
     init_stack, sb, bb = 50, 20, 40  # 盲注很大，容易触发错误
-    s_resp = _post(c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}).json()
+    s_resp = _post(
+        c, "/api/v1/session/start", {"init_stack": init_stack, "sb": sb, "bb": bb}
+    ).json()
     sid = s_resp["session_id"]
 
     # --- 2) 开第一手 ---
@@ -234,9 +257,8 @@ def test_e2e_session_carry_stacks_smaller_than_blinds_error():
     # 通过多次加注让玩家筹码减少
     for _ in range(10):
         body = _get_json(c, f"/api/v1/hand/state/{hid1}")
-        st = body["state"]
         legal = body["legal_actions"]
-        
+
         if "raise" in legal:
             # 尽量加注，消耗筹码
             act = {"action": "raise", "amount": 10}
@@ -248,7 +270,7 @@ def test_e2e_session_carry_stacks_smaller_than_blinds_error():
             act = {"action": "fold"}
         else:
             act = {"action": list(legal)[0]}
-        
+
         r = _post(c, f"/api/v1/hand/act/{hid1}", act).json()
         if r.get("hand_over"):
             break
@@ -257,20 +279,20 @@ def test_e2e_session_carry_stacks_smaller_than_blinds_error():
     body_end_1 = _get_json(c, f"/api/v1/hand/state/{hid1}")
     st_end_1 = body_end_1["state"]
     end_stacks = _players_stacks(st_end_1)
-    
+
     # 验证筹码确实变得很少（小于盲注）
     assert any(stack < min(sb, bb) for stack in end_stacks), "应该有玩家筹码小于盲注"
 
     # --- 4) 尝试开下一手，应该抛出错误 ---
     # 这里我们需要直接调用引擎层的 start_hand_with_carry 来测试错误
     from poker_core.state_hu import start_hand_with_carry
-    
+
     # 模拟 session_next_api 的逻辑，但直接调用引擎函数
     cfg = {"init_stack": init_stack, "sb": sb, "bb": bb}
     session_id = sid
     hand_id = "test_hand"
     button = 0  # 假设按钮为0
-    
+
     # 这里应该抛出 ValueError
     with pytest.raises(ValueError, match="carry stacks smaller than blinds"):
         start_hand_with_carry(
@@ -279,5 +301,5 @@ def test_e2e_session_carry_stacks_smaller_than_blinds_error():
             hand_id=hand_id,
             button=button,
             stacks=tuple(end_stacks),  # 使用第一手结束时的筹码
-            seed=42
+            seed=42,
         )

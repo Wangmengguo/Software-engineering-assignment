@@ -1,5 +1,9 @@
-from poker_core.suggest.service import _clamp_amount_if_needed, POLICY_REGISTRY, _build_observation
 from poker_core.domain.actions import LegalAction
+from poker_core.suggest.service import (
+    POLICY_REGISTRY,
+    _build_observation,
+    _clamp_amount_if_needed,
+)
 
 
 def test_clamp_amount_if_needed_clamps_and_reports():
@@ -38,4 +42,3 @@ def test_build_observation_injects_warning_on_analysis_failure(monkeypatch):
     obs, pre = _build_observation(gs, 0, acts)
     assert obs.street == "flop"
     assert pre and any(x.get("code") == "W_ANALYSIS" for x in pre)
-

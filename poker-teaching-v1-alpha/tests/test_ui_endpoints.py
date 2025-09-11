@@ -1,4 +1,5 @@
 import json
+
 import pytest
 from django.test import Client
 
@@ -29,8 +30,8 @@ def test_ui_game_page_and_act_flow():
     assert r2.status_code == 200
     # OOB 片段中应包含 legal-actions/amount-wrap 的容器
     text = r2.content.decode("utf-8")
-    assert "id=\"legal-actions\"" in text
-    assert "id=\"amount-wrap\"" in text
+    assert 'id="legal-actions"' in text
+    assert 'id="amount-wrap"' in text
 
 
 @pytest.mark.django_db
@@ -43,7 +44,7 @@ def test_ui_coach_suggest_returns_panel():
     actor = int(st["state"]["to_act"]) if st.get("state") else 0
     r = c.post(f"/api/v1/ui/coach/{hid}/suggest", data={"hand_id": hid, "actor": actor})
     assert r.status_code == 200
-    assert b"id=\"coach-panel\"" in r.content
+    assert b'id="coach-panel"' in r.content
 
 
 @pytest.mark.django_db
@@ -61,17 +62,20 @@ def test_ui_start_redirect_and_game_includes_seats_and_log():
     # Game page should include board, seats and action log containers
     r2 = c.get(goto)
     html = r2.content.decode("utf-8")
-    assert "id=\"board\"" in html
-    assert "id=\"seats\"" in html
-    assert "id=\"action-log\"" in html
-    assert "id=\"action-form\"" in html
+    assert 'id="board"' in html
+    assert 'id="seats"' in html
+    assert 'id="action-log"' in html
+    assert 'id="action-form"' in html
 
 
 def _prefer_action(legal):
     la = set(legal or [])
-    if "check" in la: return {"action": "check"}
-    if "call" in la:  return {"action": "call"}
-    if "fold" in la:  return {"action": "fold"}
+    if "check" in la:
+        return {"action": "check"}
+    if "call" in la:
+        return {"action": "call"}
+    if "fold" in la:
+        return {"action": "fold"}
     return {"action": list(la)[0]} if la else {"action": "check"}
 
 
@@ -89,9 +93,9 @@ def test_ui_act_oob_updates_board_seats_and_log():
     assert r.status_code == 200
     txt = r.content.decode("utf-8")
     # OOB fragments should include these containers for live update
-    assert "id=\"board\"" in txt
-    assert "id=\"seats\"" in txt
-    assert "id=\"action-log\"" in txt
+    assert 'id="board"' in txt
+    assert 'id="seats"' in txt
+    assert 'id="action-log"' in txt
 
 
 @pytest.mark.django_db
@@ -115,9 +119,9 @@ def test_ui_session_next_sets_push_url_and_updates_fragments():
     assert r.status_code == 200
     assert "HX-Push-Url" in r, "ui/session/next should set HX-Push-Url"
     s = r.content.decode("utf-8")
-    assert "id=\"action-form\"" in s
-    assert "id=\"seats\"" in s
-    assert "id=\"board\"" in s
+    assert 'id="action-form"' in s
+    assert 'id="seats"' in s
+    assert 'id="board"' in s
 
 
 @pytest.mark.django_db
@@ -146,7 +150,7 @@ def test_session_end_by_max_hands_and_idempotent():
     assert r2.status_code == 200
     assert "HX-Push-Url" not in r2
     html2 = r2.content.decode("utf-8")
-    assert "Session Ended" in html2 and "id=\"action-form\"" in html2
+    assert "Session Ended" in html2 and 'id="action-form"' in html2
     # Idempotent: repeat both; results should be consistent
     r3 = _post(c, "/api/v1/session/next", {"session_id": sid})
     assert r3.status_code == 409
@@ -239,5 +243,5 @@ def test_ui_replay_page_minimal():
     html = r.content.decode("utf-8")
     assert "Hand Replay" in html
     assert f">{hid}<" in html or hid in html  # hand id chip present
-    assert "id=\"action-log\"" in html
+    assert 'id="action-log"' in html
     assert "card" in html  # board/cards present

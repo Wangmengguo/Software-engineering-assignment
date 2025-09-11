@@ -1,4 +1,4 @@
-# Poker Teaching System — v0.4+
+# Poker Teaching System — v1+
 
 一个“教学优先”的两人德扑（HU NLHE）系统：纯函数领域引擎 + Django/DRF API + 教学视图。
 
@@ -87,8 +87,8 @@ UI 粘合端点（HTML 片段，返回 200 + OOB；仅转译/组合，不改变�
   回放页（SSR）：
  - `GET  /api/v1/ui/replay/<hand_id>`：服务器组装时间轴与基础数据；前端仅本地播放；播放时按钮带 UI 锁。
  - `POST /api/v1/ui/prefs/teach` 切换教学模式（server truth 存于 `request.session['teach']`，默认开启 Teach）。
-  - 行为：返回 OOB 片段刷新 对手手牌区域 与开关按钮本身；不改变 URL。
-  - 规则（摊牌展示）：仅当满足以下任一条件时，才展示对手底牌：
+ - 行为：返回 OOB 片段刷新 对手手牌区域 与开关按钮本身；不改变 URL。
+ - 规则（摊牌展示）：仅当满足以下任一条件时，才展示对手底牌：
     1) Teach=ON；或
     2) 本手以摊牌结束（事件含 `showdown`/`win_showdown`）。
     若以弃牌结束（事件含 `win_fold`），即便 `street == 'complete'`，也不展示对手底牌。
@@ -99,6 +99,61 @@ UI 粘合端点（HTML 片段，返回 200 + OOB；仅转译/组合，不改变�
 pytest -q
 coverage run -m pytest && coverage report --include "packages/poker_core/*"
 ```
+
+- 配置测试环节
+	- source .env.test
+
+```
+# 测试环境配置 - 始终使用 v1 策略
+export SUGGEST_POLICY_VERSION=v1_preflop
+export SUGGEST_CONFIG_DIR=packages/poker_core/suggest
+export SUGGEST_DEBUG=1
+export SUGGEST_TABLE_MODE=HU
+```
+
+- Suggest 调试脚本（本地，无需起服务）：
+  - 单次输出（包含 debug.meta；preflop 不含 size_tag）：
+    ```bash
+    python scripts/suggest_debug_tool.py single \
+      --policy auto --pct 10 --debug 1 --seed 42 --button 0
+    ```
+  - 灰度分布粗检（稳定哈希，不调用引擎）：
+    ```bash
+    python scripts/suggest_debug_tool.py dist --policy auto --pct 10 --debug 1 --count 2000 --show-sample 8
+    ```
+  - 说明：
+    - 通过 `--policy/--pct/--debug/--table-mode` 设置 `SUGGEST_*` 环境变量；`--policy v0` 为默认回退。
+    - `single` 会真实构造一手牌并调用 `build_suggestion`，必要时返回完整 JSON（含 `debug.meta`）。
+    - `dist` 使用稳定散列（sha1）计算 `rolled_to_v1` 命中，不触发引擎与策略。
+
+环境变量（常用）
+- `SUGGEST_POLICY_VERSION`：策略大版本选择
+  - `v0`（默认）：兼容老策略
+  - `v1` / `v1_preflop`：启用 v1（v1_preflop 为兼容别名）
+- `SUGGEST_STRATEGY`：三档策略切换
+  - `loose`｜`medium`（默认）｜`tight`
+- `SUGGEST_PREFLOP_ENABLE_4BET`：是否启用 SB vs 3bet 的 4-bet 分支
+  - `0`（默认关闭）｜`1`（开启；尺寸/上限读取 `table_modes_{strategy}.json`）
+- `SUGGEST_CONFIG_DIR`：外置配置根目录（可覆盖内置 `config/`）
+  - 该目录下需包含：`table_modes_{strategy}.json` 与 `ranges/preflop_{open,vs_raise}_HU_{strategy}.json`
+- `SUGGEST_DEBUG`：调试开关
+  - `1` 时返回 `debug.meta` 并输出结构化日志；`0` 默认关闭
+
+示例（本地运行带调试）：
+```bash
+export SUGGEST_POLICY_VERSION=v1_preflop
+export SUGGEST_STRATEGY=medium
+export SUGGEST_PREFLOP_ENABLE_4BET=1   # 可选
+export SUGGEST_DEBUG=1
+python scripts/suggest_debug_tool.py single --policy v1_preflop --debug 1 --seed 42 --button 0
+```
+
+策略说明（关键口径与边界）
+- 赔率口径：`pot_odds = to_call / (pot_now + to_call)`；其中 `pot_now = pot + sum(invested_street)`（不含本次待跟注）。
+- 最小重开（to-amount 语义）：若目标金额低于 `raise.min`，提升到 `raise.min` 再参与合法性钳制（可能触发 `W_CLAMPED`）。
+- 三桶口径：`small ≤2.5x`、`mid ≤4x`、`large >4x`（3bet 的“to-amount”阈值可在 `table_modes_{strategy}.json` 用 `threebet_bucket_small_le/mid_le` 配置）。
+- 集合重叠优先级：若同一组合同时属于 `reraise[bucket]` 与 `call[bucket]`，优先 `3bet`。
+- 4-bet 行为：需设置 `SUGGEST_PREFLOP_ENABLE_4BET=1`，才会读取 `SB_vs_BB_3bet` 的 `fourbet` 集合并计算 4-bet 尺寸。
 
 — 怎么修（Dev/Fix） —
 
@@ -130,6 +185,31 @@ coverage run -m pytest && coverage report --include "packages/poker_core/*"
   - 不轮询；仅“执行动作/获取建议/开始下一手”发请求
   - Coach 显式触发；CSRF 通过 `{% csrf_token %}` 与 `hx-headers` 注入
   - 首屏 SSR 为真数据；OOB 与刷新效果一致（Session 结束时 SSR 直接渲染结束卡片；回放页 SSR 直接可用）。
+
+调试与日志（看什么 / 好坏阈值 / 怎么调）
+- `debug.meta`（当 `SUGGEST_DEBUG=1`）主要字段：
+  - `to_call_bb` / `open_to_bb` / `pot_odds`：校验赔率口径是否一致
+  - `reraise_to_bb` / `fourbet_to_bb` / `cap_bb`：尺寸与封顶检查（若经常触发 `PF_*_MIN_RAISE_ADJUSTED` 或 `W_CLAMPED`，考虑增大 mult 或调整 cap）
+  - `bucket` / `strategy` / `config_versions`：归因与追踪
+- 结构化日志：包含 `threebet_to_bb` / `fourbet_to_bb` / `pot_odds` / `bucket` 等；灰度期用来定位金额异常。
+- 调参入口：`packages/poker_core/suggest/config/table_modes_{strategy}.json`
+  - `reraise_ip_mult` / `reraise_oop_mult` / `reraise_oop_offset` / `cap_ratio`
+  - `fourbet_ip_mult` / `cap_ratio_4b`
+  - `threebet_bucket_small_le` / `threebet_bucket_mid_le`
+- 范围入口：`packages/poker_core/suggest/config/ranges/*.json`
+  - `preflop_open_HU_{strategy}.json`（RFI）
+  - `preflop_vs_raise_HU_{strategy}.json`（BB_vs_SB 的 `call/reraise`，以及 `SB_vs_BB_3bet` 的 `fourbet/call`）
+
+CI Ranges Gate（零依赖）
+- 工作流会运行 `node scripts/check_preflop_ranges.js --dir packages/poker_core/suggest/config`，校验：
+  - RFI 覆盖（grid/combos）、defend 覆盖（small/mid/large）、3bet 占比
+  - 桶内单调：small ⊇ mid ⊇ large（call/raise 各自）
+  - 跨档单调：loose ⊇ medium ⊇ tight（open/call/raise 各自）
+  - overlap 提示（≥8% 提示、≥15% 警告，不阻断）
+  - 边界回归（打印型）：SB 4x KQo｜SB 4.5x ATs
+  - 单位回归（打印型）：4.0bb/4.5bb → pot_odds
+  - （可选）样本统计：设置 `SUGGEST_DEBUG_SAMPLES=/path/to.jsonl` 统计 `W_CLAMPED` 与最小重开占比
+  - 结果会作为 Job Summary 与 PR 评论输出简报（RFI/defend/3bet/overlap 摘要）
 
 数据与迁移
 

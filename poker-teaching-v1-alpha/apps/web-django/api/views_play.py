@@ -3,35 +3,39 @@ API 视图：游戏流程控制
 """
 
 from __future__ import annotations
-import uuid
-from typing import Optional
+
 import time
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status, serializers
-from drf_spectacular.utils import extend_schema, inline_serializer
-from .models import Replay, Session
-from .state import HANDS, snapshot_state, METRICS
-from django.shortcuts import get_object_or_404
-from . import metrics
-from poker_core.session_types import SessionView
-from poker_core.session_flow import next_hand
-from poker_core.suggest.service import build_suggestion
-from poker_core.analysis import annotate_player_hand
+import uuid
+from datetime import UTC
+
 from django.db import transaction
+from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema, inline_serializer
+from poker_core.analysis import annotate_player_hand
+from poker_core.session_flow import next_hand
+from poker_core.session_types import SessionView
 
 # 领域函数（按你项目的实际导入路径调整）
-from poker_core.state_hu import (
-    start_hand as _start_hand,
-    legal_actions as _legal_actions,
-    apply_action as _apply_action,
-    settle_if_needed as _settle_if_needed,
-    start_hand_with_carry as _start_hand_with_carry,
-)
+from poker_core.state_hu import apply_action as _apply_action
+from poker_core.state_hu import legal_actions as _legal_actions
+from poker_core.state_hu import settle_if_needed as _settle_if_needed
+from poker_core.state_hu import start_hand as _start_hand
+from poker_core.state_hu import start_hand_with_carry as _start_hand_with_carry
+from poker_core.suggest.service import build_suggestion
+from rest_framework import serializers, status
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+from . import metrics
+from .models import Replay, Session
+from .state import HANDS, METRICS, snapshot_state
 
 # --- Session end helpers (MVP) ---
 
-def _build_session_end_summary(s: Session, gs, reason: str, *, last_hand_id: str | None = None) -> dict:
+
+def _build_session_end_summary(
+    s: Session, gs, reason: str, *, last_hand_id: str | None = None
+) -> dict:
     """Build minimal end summary consistent across REST/UI."""
     hands_played = int(getattr(s, "hand_counter", 0) or 0)
     try:
@@ -64,7 +68,8 @@ def finalize_session(s: Session, gs, reason: str, *, last_hand_id: str | None = 
             "last_hand_id": stats.get("last_hand_id"),
         }
 
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     with transaction.atomic():
         s_locked = Session.objects.select_for_update().get(pk=s.pk)
         if s_locked.status == "ended":
@@ -80,13 +85,14 @@ def finalize_session(s: Session, gs, reason: str, *, last_hand_id: str | None = 
         summary = _build_session_end_summary(s_locked, gs, reason, last_hand_id=last_hand_id)
         s_locked.status = "ended"
         s_locked.ended_reason = reason
-        s_locked.ended_at = datetime.now(timezone.utc)
+        s_locked.ended_at = datetime.now(UTC)
         s_locked.stats = summary
         s_locked.save(update_fields=["status", "ended_reason", "ended_at", "stats", "updated_at"])
 
     # Structured log for observability
     try:
         import logging
+
         logging.info(
             "session_end",
             extra={
@@ -100,6 +106,7 @@ def finalize_session(s: Session, gs, reason: str, *, last_hand_id: str | None = 
         pass
 
     return summary
+
 
 # 从 events 中提取 outcome 信息
 def _extract_outcome_from_events(gs) -> dict | None:
@@ -115,13 +122,15 @@ def _extract_outcome_from_events(gs) -> dict | None:
             return {"winner": e.get("who"), "best5": None}
     return None
 
+
 # 统一的回放持久化（手牌结束时调用）
 def _persist_replay(hand_id: str, gs) -> None:
     try:
         session_id = HANDS.get(hand_id, {}).get("session_id")
         seed = HANDS.get(hand_id, {}).get("seed")
         # 统一的replay数据结构
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from poker_core.version import ENGINE_COMMIT, SCHEMA_VERSION
 
         outcome = _extract_outcome_from_events(gs)
@@ -129,7 +138,7 @@ def _persist_replay(hand_id: str, gs) -> None:
         # 获取玩家数据和注释
         players_data = []
         annotations_data = []
-        if hasattr(gs, 'players'):
+        if hasattr(gs, "players"):
             for i, player in enumerate(gs.players):
                 player_info = {
                     "pos": i,
@@ -150,82 +159,90 @@ def _persist_replay(hand_id: str, gs) -> None:
 
         # 生成基础的steps数据
         steps_data = []
-        if hasattr(gs, 'events') and gs.events:
+        if hasattr(gs, "events") and gs.events:
             # 游戏开始步骤
-            steps_data.append({
-                "idx": 0,
-                "evt": "GAME_START",
-                "payload": {
-                    "session_id": session_id,
-                    "seed": seed,
-                    "players": len(players_data)
+            steps_data.append(
+                {
+                    "idx": 0,
+                    "evt": "GAME_START",
+                    "payload": {
+                        "session_id": session_id,
+                        "seed": seed,
+                        "players": len(players_data),
+                    },
                 }
-            })
+            )
 
             # 从events生成steps (选取关键事件)
             key_events = ["deal_hole", "showdown", "win_fold", "win_showdown"]
             for event in gs.events:
                 if event.get("t") in key_events:
-                    steps_data.append({
-                        "idx": len(steps_data),
-                        "evt": event.get("t", "").upper(),
-                        "payload": {k: v for k, v in event.items() if k != "t"}
-                    })
+                    steps_data.append(
+                        {
+                            "idx": len(steps_data),
+                            "evt": event.get("t", "").upper(),
+                            "payload": {k: v for k, v in event.items() if k != "t"},
+                        }
+                    )
 
             # 游戏结束步骤
             if outcome:
-                steps_data.append({
-                    "idx": len(steps_data),
-                    "evt": "GAME_END",
-                    "payload": outcome
-                })
+                steps_data.append({"idx": len(steps_data), "evt": "GAME_END", "payload": outcome})
 
         replay_data = {
             # 基本信息
             "hand_id": hand_id,
             "session_id": session_id,
             "seed": seed,
-
             # 游戏数据
             "events": getattr(gs, "events", []),
             "board": list(getattr(gs, "board", [])),
             "button": getattr(gs, "button", 0),  # 庄位信息
             "winner": outcome.get("winner") if outcome else None,
             "best5": outcome.get("best5") if outcome else None,
-
             # 教学数据
             "players": players_data,
             "annotations": annotations_data,
             "steps": steps_data,
-
             # 元数据
             "engine_commit": ENGINE_COMMIT,
             "schema_version": SCHEMA_VERSION,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         Replay.objects.update_or_create(hand_id=hand_id, defaults={"payload": replay_data})
     except Exception as e:
         import logging
+
         logging.warning(f"Failed to save replay for {hand_id}: {e}")
+
 
 # ---------- 1) POST /session/start ----------
 @extend_schema(
-    request=inline_serializer(name="StartSessionReq", fields={
-        "init_stack": serializers.IntegerField(required=False, default=200, min_value=1),
-        "sb": serializers.IntegerField(required=False, default=1, min_value=1),
-        "bb": serializers.IntegerField(required=False, default=2, min_value=2),
-        "max_hands": serializers.IntegerField(required=False, min_value=1, allow_null=True),
-    }),
-    responses={200: inline_serializer(name="StartSessionResp", fields={
-        "session_id": serializers.CharField(),
-        "button": serializers.IntegerField(),
-        "stacks": serializers.ListField(child=serializers.IntegerField()),
-        "config": serializers.JSONField(),
-    })}
+    request=inline_serializer(
+        name="StartSessionReq",
+        fields={
+            "init_stack": serializers.IntegerField(required=False, default=200, min_value=1),
+            "sb": serializers.IntegerField(required=False, default=1, min_value=1),
+            "bb": serializers.IntegerField(required=False, default=2, min_value=2),
+            "max_hands": serializers.IntegerField(required=False, min_value=1, allow_null=True),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="StartSessionResp",
+            fields={
+                "session_id": serializers.CharField(),
+                "button": serializers.IntegerField(),
+                "stacks": serializers.ListField(child=serializers.IntegerField()),
+                "config": serializers.JSONField(),
+            },
+        )
+    },
 )
 @api_view(["POST"])
 def session_start_api(request):
     import time
+
     start_time = time.time()
     t0 = time.perf_counter()
     route = "session/start"
@@ -261,7 +278,9 @@ def session_start_api(request):
         duration = time.time() - start_time
         METRICS["last_latency_ms"] = int(duration * 1000)
 
-        return Response({"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config})
+        return Response(
+            {"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config}
+        )
 
     except Exception as e:
         # 记录错误
@@ -275,6 +294,7 @@ def session_start_api(request):
             pass
 
         import logging
+
         logging.error(f"Session creation failed: {e}")
         return Response({"detail": f"Session creation failed: {str(e)}"}, status=500)
     finally:
@@ -286,16 +306,24 @@ def session_start_api(request):
 
 # ---------- 2) POST /hand/start ----------
 @extend_schema(
-    request=inline_serializer(name="StartHandReq", fields={
-        "session_id": serializers.CharField(),
-        "seed": serializers.IntegerField(required=False, allow_null=True),
-        "button": serializers.IntegerField(required=False, allow_null=True),
-    }),
-    responses={200: inline_serializer(name="StartHandResp", fields={
-        "hand_id": serializers.CharField(),
-        "state": serializers.JSONField(),
-        "legal_actions": serializers.ListField(child=serializers.CharField()),
-    })}
+    request=inline_serializer(
+        name="StartHandReq",
+        fields={
+            "session_id": serializers.CharField(),
+            "seed": serializers.IntegerField(required=False, allow_null=True),
+            "button": serializers.IntegerField(required=False, allow_null=True),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="StartHandResp",
+            fields={
+                "hand_id": serializers.CharField(),
+                "state": serializers.JSONField(),
+                "legal_actions": serializers.ListField(child=serializers.CharField()),
+            },
+        )
+    },
 )
 @api_view(["POST"])
 def hand_start_api(request):
@@ -311,11 +339,11 @@ def hand_start_api(request):
             pass
         return Response({"detail": "session not running"}, status=409)
     cfg = s.config
-    seed: Optional[int] = request.data.get("seed")
+    seed: int | None = request.data.get("seed")
     button = request.data.get("button", s.button)
     hand_id = str(uuid.uuid4())
 
-    gs  = _start_hand(cfg, session_id=session_id, hand_id=hand_id, button=int(button), seed=seed)
+    gs = _start_hand(cfg, session_id=session_id, hand_id=hand_id, button=int(button), seed=seed)
 
     HANDS[hand_id] = {"gs": gs, "session_id": session_id, "seed": seed, "cfg": cfg}
     # 下一手按钮建议轮转（这里不直接改，交给结算后更新；先返回当前）
@@ -333,11 +361,16 @@ def hand_start_api(request):
 
 # ---------- 3) GET /hand/{hand_id}/state ----------
 @extend_schema(
-    responses={200: inline_serializer(name="HandStateResp", fields={
-        "hand_id": serializers.CharField(),
-        "state": serializers.JSONField(),
-        "legal_actions": serializers.ListField(child=serializers.CharField()),
-    })}
+    responses={
+        200: inline_serializer(
+            name="HandStateResp",
+            fields={
+                "hand_id": serializers.CharField(),
+                "state": serializers.JSONField(),
+                "legal_actions": serializers.ListField(child=serializers.CharField()),
+            },
+        )
+    }
 )
 @api_view(["GET"])
 def hand_state_api(request, hand_id: str):
@@ -352,7 +385,13 @@ def hand_state_api(request, hand_id: str):
         return Response({"detail": "hand not found"}, status=404)
     gs = HANDS[hand_id]["gs"]
     try:
-        return Response({"hand_id": hand_id, "state": snapshot_state(gs), "legal_actions": list(_legal_actions(gs))})
+        return Response(
+            {
+                "hand_id": hand_id,
+                "state": snapshot_state(gs),
+                "legal_actions": list(_legal_actions(gs)),
+            }
+        )
     finally:
         try:
             metrics.observe_request(route, method, "200", time.perf_counter() - t0)
@@ -366,24 +405,34 @@ OutcomeSchema = inline_serializer(
     fields={
         "winner": serializers.IntegerField(allow_null=True),
         "best5": serializers.ListField(
-            child=serializers.ListField(child=serializers.CharField()),
-            allow_null=True
-        )
-    }
+            child=serializers.ListField(child=serializers.CharField()), allow_null=True
+        ),
+    },
 )
 
+
 @extend_schema(
-    request=inline_serializer(name="ActReq", fields={
-        "action": serializers.ChoiceField(choices=["check","call","bet","raise","fold","allin"]),
-        "amount": serializers.IntegerField(required=False, allow_null=True, min_value=1),
-    }),
-    responses={200: inline_serializer(name="ActResp", fields={
-        "hand_id": serializers.CharField(),
-        "state": serializers.JSONField(),
-        "legal_actions": serializers.ListField(child=serializers.CharField()),
-        "hand_over": serializers.BooleanField(),
-        "outcome": OutcomeSchema,
-    })}
+    request=inline_serializer(
+        name="ActReq",
+        fields={
+            "action": serializers.ChoiceField(
+                choices=["check", "call", "bet", "raise", "fold", "allin"]
+            ),
+            "amount": serializers.IntegerField(required=False, allow_null=True, min_value=1),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="ActResp",
+            fields={
+                "hand_id": serializers.CharField(),
+                "state": serializers.JSONField(),
+                "legal_actions": serializers.ListField(child=serializers.CharField()),
+                "hand_over": serializers.BooleanField(),
+                "outcome": OutcomeSchema,
+            },
+        )
+    },
 )
 @api_view(["POST"])
 def hand_act_api(request, hand_id: str):
@@ -416,7 +465,7 @@ def hand_act_api(request, hand_id: str):
 
     # 判断是否结束（按你的实现是 'complete' 或标志位）
     street = getattr(gs, "street", None) or (getattr(gs, "state", {}) or {}).get("street")
-    hand_over = (street in {"complete", "showdown_complete"} or getattr(gs, "is_over", False))
+    hand_over = street in {"complete", "showdown_complete"} or getattr(gs, "is_over", False)
 
     payload = {
         "hand_id": hand_id,
@@ -441,6 +490,7 @@ def hand_act_api(request, hand_id: str):
         except Exception:
             pass
 
+
 # ---------- 5) GET /session/{session_id}/state ----------
 
 SessionStateResp = inline_serializer(
@@ -449,13 +499,16 @@ SessionStateResp = inline_serializer(
         "session_id": serializers.CharField(),
         "button": serializers.IntegerField(),
         "stacks": serializers.ListField(child=serializers.IntegerField()),
-        "stacks_after_blinds": serializers.ListField(child=serializers.IntegerField(), allow_null=True),
+        "stacks_after_blinds": serializers.ListField(
+            child=serializers.IntegerField(), allow_null=True
+        ),
         "sb": serializers.IntegerField(),
         "bb": serializers.IntegerField(),
         "hand_counter": serializers.IntegerField(),
         "current_hand_id": serializers.CharField(required=False, allow_null=True),
-    }
+    },
 )
+
 
 @extend_schema(responses={200: SessionStateResp})
 @api_view(["GET"])
@@ -477,21 +530,24 @@ def session_state_api(request, session_id: str):
     sb = int((s.config or {}).get("sb", 1))
     bb = int((s.config or {}).get("bb", 2))
     try:
-        return Response({
-        "session_id": s.session_id,
-        "button": s.button,
-        "stacks": s.stacks,
-        "stacks_after_blinds": stacks_after_blinds,
-        "sb": sb,
-        "bb": bb,
-        "hand_counter": s.hand_counter,
-        "current_hand_id": current_hand_id,
-    })
+        return Response(
+            {
+                "session_id": s.session_id,
+                "button": s.button,
+                "stacks": s.stacks,
+                "stacks_after_blinds": stacks_after_blinds,
+                "sb": sb,
+                "bb": bb,
+                "hand_counter": s.hand_counter,
+                "current_hand_id": current_hand_id,
+            }
+        )
     finally:
         try:
             metrics.observe_request(route, method, "200", time.perf_counter() - t0)
         except Exception:
             pass
+
 
 # ---------- 6) POST /session/next ----------
 
@@ -501,17 +557,20 @@ NextHandResp = inline_serializer(
         "session_id": serializers.CharField(),
         "hand_id": serializers.CharField(),
         "state": serializers.JSONField(),
-    }
+    },
 )
+
 
 @extend_schema(
-    request=inline_serializer(name="NextHandReq", fields={
-        "session_id": serializers.CharField(),
-        "seed": serializers.IntegerField(required=False, allow_null=True),
-    }),
-    responses={200: NextHandResp}
+    request=inline_serializer(
+        name="NextHandReq",
+        fields={
+            "session_id": serializers.CharField(),
+            "seed": serializers.IntegerField(required=False, allow_null=True),
+        },
+    ),
+    responses={200: NextHandResp},
 )
-
 @api_view(["POST"])
 def session_next_api(request):
     t0 = time.perf_counter()
@@ -522,6 +581,7 @@ def session_next_api(request):
 
     # Serialize concurrent "next" with a row lock
     from django.db import transaction
+
     with transaction.atomic():
         try:
             s = Session.objects.select_for_update().get(session_id=session_id)
@@ -534,7 +594,9 @@ def session_next_api(request):
                 metrics.observe_request(route, method, "409", time.perf_counter() - t0)
             except Exception:
                 pass
-            return Response({"session_id": s.session_id, **(s.stats or {})}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"session_id": s.session_id, **(s.stats or {})}, status=status.HTTP_409_CONFLICT
+            )
 
         # 1) Find latest completed hand for this session
         latest_gs, latest_cfg, latest_hid = None, None, None
@@ -564,7 +626,9 @@ def session_next_api(request):
                 metrics.observe_request(route, method, "409", time.perf_counter() - t0)
             except Exception:
                 pass
-            return Response({"session_id": s.session_id, **summary}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"session_id": s.session_id, **summary}, status=status.HTTP_409_CONFLICT
+            )
 
         # 2) Plan next hand
         cfg_for_next = latest_cfg or s.config
@@ -573,7 +637,7 @@ def session_next_api(request):
             button=int(s.button),
             stacks=tuple(s.stacks),
             hand_no=int(s.hand_counter),
-            current_hand_id=None
+            current_hand_id=None,
         )
         plan = next_hand(sv, latest_gs, seed=seed)
 
@@ -587,8 +651,12 @@ def session_next_api(request):
         new_hid = str(uuid.uuid4())
         try:
             gs_new = _start_hand_with_carry(
-                cfg_for_next, session_id=session_id, hand_id=new_hid,
-                button=plan.next_button, stacks=plan.stacks, seed=plan.seed
+                cfg_for_next,
+                session_id=session_id,
+                hand_id=new_hid,
+                button=plan.next_button,
+                stacks=plan.stacks,
+                seed=plan.seed,
             )
         except ValueError:
             summary = finalize_session(s, latest_gs, "bust", last_hand_id=latest_hid)
@@ -601,24 +669,30 @@ def session_next_api(request):
 
     # outside transaction: respond success
     try:
-        return Response({
-        "session_id": session_id,
-        "hand_id": new_hid,
-        "state": snapshot_state(gs_new),
-    })
+        return Response(
+            {
+                "session_id": session_id,
+                "hand_id": new_hid,
+                "state": snapshot_state(gs_new),
+            }
+        )
     finally:
         try:
             metrics.observe_request(route, method, "200", time.perf_counter() - t0)
         except Exception:
             pass
+
+
 # ---------- 7) POST /hand/auto-step/{hand_id} ----------
 
 AutoStepReq = inline_serializer(
     name="AutoStepReq",
     fields={
         "user_actor": serializers.IntegerField(required=False, min_value=0, max_value=1, default=0),
-        "max_steps": serializers.IntegerField(required=False, min_value=1, max_value=50, default=10),
-    }
+        "max_steps": serializers.IntegerField(
+            required=False, min_value=1, max_value=50, default=10
+        ),
+    },
 )
 
 AutoStepResp = inline_serializer(
@@ -629,8 +703,9 @@ AutoStepResp = inline_serializer(
         "state": serializers.JSONField(),
         "hand_over": serializers.BooleanField(),
         "legal_actions": serializers.ListField(child=serializers.CharField()),
-    }
+    },
 )
+
 
 @extend_schema(request=AutoStepReq, responses={200: AutoStepResp})
 @api_view(["POST"])
@@ -658,13 +733,16 @@ def hand_auto_step_api(request, hand_id: str):
             metrics.observe_request(route, method, "409", time.perf_counter() - t0)
         except Exception:
             pass
-        return Response({
-            "hand_id": hand_id,
-            "steps": steps,
-            "state": snapshot_state(gs),
-            "hand_over": True,
-            "legal_actions": [],
-        }, status=409)
+        return Response(
+            {
+                "hand_id": hand_id,
+                "steps": steps,
+                "state": snapshot_state(gs),
+                "hand_over": True,
+                "legal_actions": [],
+            },
+            status=409,
+        )
 
     # 自动步进：为对手执行建议动作，直到轮到用户或结束
     while max_steps > 0:
@@ -680,12 +758,14 @@ def hand_auto_step_api(request, hand_id: str):
         gs = _apply_action(gs, act_name, amt)
         gs = _settle_if_needed(gs)
         entry["gs"] = gs
-        steps.append({
-            "actor": cur,
-            "suggested": sug,
-            "rationale": resp.get("rationale", []),
-            "policy": resp.get("policy"),
-        })
+        steps.append(
+            {
+                "actor": cur,
+                "suggested": sug,
+                "rationale": resp.get("rationale", []),
+                "policy": resp.get("policy"),
+            }
+        )
         max_steps -= 1
         # 重新检查to_act，因为_apply_action和_settle_if_needed可能改变了行动者
         cur = getattr(gs, "to_act", None)

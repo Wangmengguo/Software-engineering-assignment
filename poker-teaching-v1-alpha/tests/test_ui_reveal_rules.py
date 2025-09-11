@@ -1,5 +1,5 @@
 import json
-import re
+
 import pytest
 from django.test import Client
 
@@ -14,7 +14,7 @@ def _extract_opp_hole(html: str) -> str:
     i = html.find(key)
     if i == -1:
         return ""
-    return html[max(0, i - 80): i + 400]
+    return html[max(0, i - 80) : i + 400]
 
 
 @pytest.mark.django_db
@@ -123,5 +123,3 @@ def test_reveal_rules_teach_on_always_reveals_opp():
     frag = _extract_opp_hole(page)
     assert frag, "opp-hole container not found"
     assert 'cid="?"' not in frag, "Teach ON should always reveal opponent cards"
-
-

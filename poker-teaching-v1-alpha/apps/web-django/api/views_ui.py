@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, render
-from django.views.decorators.http import require_POST
-from django.views.decorators.http import require_http_methods
 from django.template.loader import render_to_string
-
-from .state import HANDS, snapshot_state
-from .models import Session
-from . import metrics
+from django.views.decorators.http import require_http_methods, require_POST
+from poker_core.domain.actions import legal_actions_struct
 
 # 领域函数与结构化合法动作
-from poker_core.state_hu import (
-    legal_actions as _legal_actions,
-    apply_action as _apply_action,
-    settle_if_needed as _settle_if_needed,
-    start_hand as _start_hand,
-)
-from poker_core.domain.actions import legal_actions_struct
+from poker_core.state_hu import apply_action as _apply_action
+from poker_core.state_hu import settle_if_needed as _settle_if_needed
+from poker_core.state_hu import start_hand as _start_hand
+
+from . import metrics
+from .models import Session
+from .state import HANDS, snapshot_state
 
 
 def _role_name(button: int, who: int) -> str:
@@ -33,12 +29,12 @@ def _role_name(button: int, who: int) -> str:
         return "—"
 
 
-def _actions_model(gs) -> Dict[str, Any]:
+def _actions_model(gs) -> dict[str, Any]:
     """Build action set and amount model for the action bar (no client inference)."""
     struct = legal_actions_struct(gs)
     # Only display allowed actions; no client-side inference
-    items: List[Dict[str, Any]] = []
-    to_call: Optional[int] = None
+    items: list[dict[str, Any]] = []
+    to_call: int | None = None
     has_amount = False
     min_amt = None
     max_amt = None
@@ -66,7 +62,7 @@ def _actions_model(gs) -> Dict[str, Any]:
     return {"items": items, "amount": amount, "to_call": to_call}
 
 
-def _hud_model(s: Session, st: Dict[str, Any]) -> Dict[str, Any]:
+def _hud_model(s: Session, st: dict[str, Any]) -> dict[str, Any]:
     sb = int(s.config.get("sb", 1))
     bb = int(s.config.get("bb", 2))
     to_act = st.get("to_act")
@@ -112,12 +108,22 @@ def _ended_by_showdown(gs) -> bool:
         return False
 
 
-def _log_items(gs) -> List[str]:
+def _log_items(gs) -> list[str]:
     """Build last 5 action lines: "You/Opponent + action [+amount]" (most recent first)."""
-    items: List[str] = []
+    items: list[str] = []
     if not gs or not getattr(gs, "events", None):
         return items
-    allowed = {"check", "call", "bet", "raise", "fold", "allin", "showdown", "win_fold", "win_showdown"}
+    allowed = {
+        "check",
+        "call",
+        "bet",
+        "raise",
+        "fold",
+        "allin",
+        "showdown",
+        "win_fold",
+        "win_showdown",
+    }
     for e in reversed(gs.events):
         t = e.get("t")
         if t not in allowed:
@@ -153,52 +159,83 @@ def _log_items(gs) -> List[str]:
     return items
 
 
-def _render_oob_fragments(request: HttpRequest, *,
-                          session: Session,
-                          st: Dict[str, Any],
-                          actions: Dict[str, Any],
-                          coach_html: Optional[str] = None,
-                          error_text: Optional[str] = None,
-                          show_next_controls: bool = False,
-                          replay_url: Optional[str] = None,
-                          hand_id_for_form: Optional[str] = None,
-                          coach_hand_id: Optional[str] = None,
-                          log_items: Optional[List[str]] = None,
-                          reveal_opp: Optional[bool] = None,
-                          ) -> str:
-    parts: List[str] = []
+def _render_oob_fragments(
+    request: HttpRequest,
+    *,
+    session: Session,
+    st: dict[str, Any],
+    actions: dict[str, Any],
+    coach_html: str | None = None,
+    error_text: str | None = None,
+    show_next_controls: bool = False,
+    replay_url: str | None = None,
+    hand_id_for_form: str | None = None,
+    coach_hand_id: str | None = None,
+    log_items: list[str] | None = None,
+    reveal_opp: bool | None = None,
+) -> str:
+    parts: list[str] = []
 
     # Unified error banner
     parts.append(render_to_string("ui/_error.html", {"text": error_text or ""}, request=request))
 
     # HUD (aria-live for next actor)
-    parts.append(render_to_string("ui/_hud.html", {"hud": _hud_model(session, st)}, request=request))
+    parts.append(
+        render_to_string("ui/_hud.html", {"hud": _hud_model(session, st)}, request=request)
+    )
 
     # Board + pot
     parts.append(render_to_string("ui/_board.html", {"st": st}, request=request))
 
     # Seats: stacks, per-street invested, hole cards
     teach = bool(request.session.get("teach", True))
-    parts.append(render_to_string("ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": bool(reveal_opp) if reveal_opp is not None else False}, request=request))
+    parts.append(
+        render_to_string(
+            "ui/_seats.html",
+            {
+                "st": st,
+                "teach": teach,
+                "reveal_opp": bool(reveal_opp) if reveal_opp is not None else False,
+            },
+            request=request,
+        )
+    )
 
     # Actions + amount
     if hand_id_for_form:
         # Replace whole form on new hand to update hx-post hand_id
-        parts.append(render_to_string(
-            "ui/_action_form.html",
-            {
-                "hand_id": hand_id_for_form,
-                "actions": actions,
-                "ended": show_next_controls,
-                "session_id": session.session_id,
-                "replay_url": replay_url or "#",
-            },
-            request=request,
-        ))
+        parts.append(
+            render_to_string(
+                "ui/_action_form.html",
+                {
+                    "hand_id": hand_id_for_form,
+                    "actions": actions,
+                    "ended": show_next_controls,
+                    "session_id": session.session_id,
+                    "replay_url": replay_url or "#",
+                },
+                request=request,
+            )
+        )
     else:
         # Regular: replace actions and amount separately
-        parts.append(render_to_string("ui/_actions.html", {"actions": actions, "ended": show_next_controls, "session_id": session.session_id, "replay_url": replay_url or "#"}, request=request))
-        parts.append(render_to_string("ui/_amount.html", {"amount": actions.get("amount", {})}, request=request))
+        parts.append(
+            render_to_string(
+                "ui/_actions.html",
+                {
+                    "actions": actions,
+                    "ended": show_next_controls,
+                    "session_id": session.session_id,
+                    "replay_url": replay_url or "#",
+                },
+                request=request,
+            )
+        )
+        parts.append(
+            render_to_string(
+                "ui/_amount.html", {"amount": actions.get("amount", {})}, request=request
+            )
+        )
 
     # Coach (optional OOB)
     if coach_html is not None:
@@ -206,7 +243,9 @@ def _render_oob_fragments(request: HttpRequest, *,
 
     # Coach trigger (update hx-post hand_id when new hand is created)
     if coach_hand_id:
-        parts.append(render_to_string("ui/_coach_trigger.html", {"hand_id": coach_hand_id}, request=request))
+        parts.append(
+            render_to_string("ui/_coach_trigger.html", {"hand_id": coach_hand_id}, request=request)
+        )
 
     # Action log (last 5)
     if log_items is not None:
@@ -219,8 +258,11 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
     """Game page: render skeleton + initial state (SSR)."""
     s = get_object_or_404(Session, session_id=session_id)
     entry = HANDS.get(hand_id)
-    st: Dict[str, Any] = {}
-    actions: Dict[str, Any] = {"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}}
+    st: dict[str, Any] = {}
+    actions: dict[str, Any] = {
+        "items": [],
+        "amount": {"show": False, "min": 1, "max": 0, "step": 1},
+    }
     log = []
     if entry and entry.get("gs") is not None:
         gs = entry["gs"]
@@ -231,7 +273,7 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
         else:
             actions = _actions_model(gs)
     # SSR: if session already ended, prepare session-end view data
-    session_ended = (s.status == "ended")
+    session_ended = s.status == "ended"
     ended_summary = dict(s.stats or {}) if session_ended else None
     ended_reason_text = None
     if session_ended:
@@ -311,7 +353,7 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
 
         try:
             gs = _apply_action(gs, action, amount)
-        except ValueError as e:
+        except ValueError:
             # Illegal action/amount → 422
             status_label = "422"
             entry["gs"] = gs
@@ -337,6 +379,7 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
         if hand_over:
             # 手牌结束时持久化回放数据
             from .views_play import _persist_replay
+
             _persist_replay(hand_id, gs)
             actions = {"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}}
         else:
@@ -375,21 +418,31 @@ def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
 
         hand_id = request.POST.get("hand_id") or request.GET.get("hand_id")
         session_id = request.POST.get("session_id") or request.GET.get("session_id") or ""
-        st: Dict[str, Any] = {}
+        st: dict[str, Any] = {}
         if hand_id:
             entry = HANDS.get(hand_id)
             if entry and entry.get("gs") is not None:
                 st = snapshot_state(entry["gs"])
 
-        parts: List[str] = []
+        parts: list[str] = []
         if st:
             try:
                 gs = entry.get("gs") if hand_id else None
                 rev = bool(teach or _ended_by_showdown(gs)) if gs is not None else bool(teach)
             except Exception:
                 rev = bool(teach)
-            parts.append(render_to_string("ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": rev}, request=request))
-        parts.append(render_to_string("ui/_teach_toggle.html", {"teach": teach, "hand_id": hand_id or "", "session_id": session_id}, request=request))
+            parts.append(
+                render_to_string(
+                    "ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": rev}, request=request
+                )
+            )
+        parts.append(
+            render_to_string(
+                "ui/_teach_toggle.html",
+                {"teach": teach, "hand_id": hand_id or "", "session_id": session_id},
+                request=request,
+            )
+        )
         html = "\n".join(parts)
         return _oob_response(html, route=t0_route, method=method, status_label=status_label)
     finally:
@@ -410,13 +463,18 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         if s.status == "ended":
             # Render session end card; no Push-Url
             ended_summary = dict(s.stats or {})
-            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            reason_map = {
+                "bust": "Insufficient chips to post blinds",
+                "max_hands": "Maximum hands reached",
+            }
             html = render_to_string(
                 "ui/_session_end.html",
                 {
                     "session_id": s.session_id,
                     "summary": ended_summary,
-                    "ended_reason_text": reason_map.get(s.ended_reason or "", s.ended_reason or "Ended"),
+                    "ended_reason_text": reason_map.get(
+                        s.ended_reason or "", s.ended_reason or "Ended"
+                    ),
                     "last_hand_id": None,
                 },
                 request=request,
@@ -444,8 +502,8 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
 
         # 规划下一手
-        from poker_core.session_types import SessionView
         from poker_core.session_flow import next_hand
+        from poker_core.session_types import SessionView
         from poker_core.state_hu import start_hand_with_carry as _start_hand_with_carry
 
         cfg_for_next = latest_cfg or s.config
@@ -456,8 +514,12 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
             max_hands = 0
         if max_hands and int(s.hand_counter or 0) >= max_hands:
             from .views_play import finalize_session
+
             summary = finalize_session(s, latest_gs, "max_hands", last_hand_id=latest_hid)
-            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            reason_map = {
+                "bust": "Insufficient chips to post blinds",
+                "max_hands": "Maximum hands reached",
+            }
             html = render_to_string(
                 "ui/_session_end.html",
                 {
@@ -490,16 +552,25 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
 
         # 启动新手并注册
         import uuid
+
         new_hid = str(uuid.uuid4())
         try:
             gs_new = _start_hand_with_carry(
-                cfg_for_next, session_id=session_id, hand_id=new_hid,
-                button=plan.next_button, stacks=plan.stacks, seed=plan.seed,
+                cfg_for_next,
+                session_id=session_id,
+                hand_id=new_hid,
+                button=plan.next_button,
+                stacks=plan.stacks,
+                seed=plan.seed,
             )
         except ValueError:
             from .views_play import finalize_session
+
             summary = finalize_session(s, latest_gs, "bust", last_hand_id=latest_hid)
-            reason_map = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+            reason_map = {
+                "bust": "Insufficient chips to post blinds",
+                "max_hands": "Maximum hands reached",
+            }
             html = render_to_string(
                 "ui/_session_end.html",
                 {
@@ -520,14 +591,27 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         # 片段渲染
         st = snapshot_state(gs_new)
         actions = _actions_model(gs_new)
-        html = _render_oob_fragments(request, session=s, st=st, actions=actions, show_next_controls=False, hand_id_for_form=new_hid, coach_hand_id=new_hid, log_items=_log_items(gs_new))
+        html = _render_oob_fragments(
+            request,
+            session=s,
+            st=st,
+            actions=actions,
+            show_next_controls=False,
+            hand_id_for_form=new_hid,
+            coach_hand_id=new_hid,
+            log_items=_log_items(gs_new),
+        )
         # 方案A：在开始新手后，同步更新 Teach 按钮（带上新的 hand_id）
         try:
             teach = bool(request.session.get("teach", True))
-            html = html + "\n" + render_to_string(
-                "ui/_teach_toggle.html",
-                {"teach": teach, "hand_id": new_hid, "session_id": session_id},
-                request=request,
+            html = (
+                html
+                + "\n"
+                + render_to_string(
+                    "ui/_teach_toggle.html",
+                    {"teach": teach, "hand_id": new_hid, "session_id": session_id},
+                    request=request,
+                )
             )
         except Exception:
             pass
@@ -579,25 +663,37 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
             actor = 0
         if actor not in (0, 1):
             status_label = "422"
-            html = _render_oob_fragments(request, session=s, st=st, actions=actions, error_text="Invalid suggest parameters")
+            html = _render_oob_fragments(
+                request, session=s, st=st, actions=actions, error_text="Invalid suggest parameters"
+            )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
 
         # 构建建议
-        from poker_core.suggest.service import build_suggestion
         import time
+
+        from poker_core.suggest.service import build_suggestion
+
         t0 = time.perf_counter()
         try:
             resp = build_suggestion(gs, actor)
             # Metrics (align with SuggestView)
             try:
-                metrics.inc_action(resp.get("policy"), resp.get("suggested", {}).get("action", ""), street=getattr(gs, "street", None))
+                metrics.inc_action(
+                    resp.get("policy"),
+                    resp.get("suggested", {}).get("action", ""),
+                    street=getattr(gs, "street", None),
+                )
                 rationale = resp.get("rationale", []) or []
                 if any((r or {}).get("code") == "W_CLAMPED" for r in rationale):
                     metrics.inc_clamped(resp.get("policy"), street=getattr(gs, "street", None))
             except Exception:
                 pass
             try:
-                metrics.observe_latency(resp.get("policy", "unknown"), getattr(gs, "street", None), time.perf_counter() - t0)
+                metrics.observe_latency(
+                    resp.get("policy", "unknown"),
+                    getattr(gs, "street", None),
+                    time.perf_counter() - t0,
+                )
             except Exception:
                 pass
 
@@ -608,17 +704,25 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
             # Clamped hint
             rationale = resp.get("rationale", []) or []
             if any((r or {}).get("code") == "W_CLAMPED" for r in rationale):
-                coach_html += "\n" + render_to_string("ui/_status_chip.html", {"text": "Clamped", "extra_class": ""}, request=request)
+                coach_html += "\n" + render_to_string(
+                    "ui/_status_chip.html", {"text": "Clamped", "extra_class": ""}, request=request
+                )
 
-            html = _render_oob_fragments(request, session=s, st=st, actions=actions, coach_html=coach_html)
+            html = _render_oob_fragments(
+                request, session=s, st=st, actions=actions, coach_html=coach_html
+            )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
         except PermissionError:
             status_label = "409"
-            html = _render_oob_fragments(request, session=s, st=st, actions=actions, error_text="Not your turn")
+            html = _render_oob_fragments(
+                request, session=s, st=st, actions=actions, error_text="Not your turn"
+            )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
         except ValueError:
             status_label = "422"
-            html = _render_oob_fragments(request, session=s, st=st, actions=actions, error_text="Suggestion unavailable")
+            html = _render_oob_fragments(
+                request, session=s, st=st, actions=actions, error_text="Suggestion unavailable"
+            )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
     finally:
         pass
@@ -643,6 +747,7 @@ def ui_replay_view(request: HttpRequest, hand_id: str) -> HttpResponse:
         # Try to get replay data from database (primary source)
         try:
             from .models import Replay
+
             obj = Replay.objects.get(hand_id=hand_id)
             replay_data = obj.payload
         except Replay.DoesNotExist:
@@ -653,6 +758,7 @@ def ui_replay_view(request: HttpRequest, hand_id: str) -> HttpResponse:
 
         # Convert replay data to JSON string for template
         import json
+
         replay_json = json.dumps(replay_data)
 
         ctx = {
@@ -676,6 +782,7 @@ def ui_start(request: HttpRequest) -> HttpResponse:
         return render(request, "poker_teaching_entry_splash_start_the_session.html", {})
 
     import uuid
+
     init_stack, sb, bb = 200, 1, 2
     try:
         # Create session (defaults)
@@ -690,7 +797,9 @@ def ui_start(request: HttpRequest) -> HttpResponse:
         )
         # Start first hand
         hand_id = str(uuid.uuid4())
-        gs = _start_hand(s.config, session_id=session_id, hand_id=hand_id, button=int(s.button), seed=None)
+        gs = _start_hand(
+            s.config, session_id=session_id, hand_id=hand_id, button=int(s.button), seed=None
+        )
         HANDS[hand_id] = {"gs": gs, "session_id": session_id, "seed": None, "cfg": s.config}
 
         resp = HttpResponse("", status=200)

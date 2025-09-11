@@ -1,7 +1,9 @@
 # tests/test_openapi_valid.py
 import json
+
 import pytest
 from django.test import Client
+
 
 @pytest.mark.django_db
 def test_openapi_schema_has_minimal_keys():

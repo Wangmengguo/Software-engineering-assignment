@@ -8,9 +8,8 @@ This module exposes a single function `evaluate_7card_strength(cards7)`
 that returns a comparable integer (higher is stronger). The exact scale
 is unspecified; only relative ordering matters.
 """
-from __future__ import annotations
 
-from typing import List
+from __future__ import annotations
 
 try:
     import pokerkit  # type: ignore
@@ -21,7 +20,7 @@ except Exception:  # pragma: no cover - defensive import
     _POKERKIT_AVAILABLE = False
 
 
-def _fallback_strength(cards7: List[str]) -> int:
+def _fallback_strength(cards7: list[str]) -> int:
     """Very rough heuristic based on top-5 rank sum.
 
     Keeps behavior compatible with existing tests when `pokerkit` is not
@@ -33,7 +32,7 @@ def _fallback_strength(cards7: List[str]) -> int:
     return sum(sorted(values, reverse=True)[:5])
 
 
-def evaluate_7card_strength(cards7: List[str]) -> int:
+def evaluate_7card_strength(cards7: list[str]) -> int:
     """Evaluate 7-card strength with best-5 selection.
 
     - If `pokerkit` is present, try a few common entrypoints.
@@ -70,4 +69,3 @@ def evaluate_7card_strength(cards7: List[str]) -> int:
 
     # No pokerkit in the environment
     return _fallback_strength(cards7)
-
