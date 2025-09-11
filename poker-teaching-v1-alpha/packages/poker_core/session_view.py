@@ -1,5 +1,6 @@
 from poker_core.session_types import SessionView
 
+
 # 从持久化 Session 折叠（在 Django 层调用）
 def snapshot_session_from_model(session_model) -> SessionView:
     return SessionView(

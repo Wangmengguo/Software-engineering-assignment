@@ -1,12 +1,14 @@
 # packages/poker_core/state_hu.py
 from __future__ import annotations
-from dataclasses import dataclass, replace
-from typing import List, Literal, Optional, Tuple, Dict
-from poker_core.rng import RNG
+
 import random
+from dataclasses import dataclass, replace
+from typing import Literal
+
 from poker_core.cards import make_deck
-from poker_core.providers.selector import get_evaluator
 from poker_core.providers.interfaces import Strength
+from poker_core.providers.selector import get_evaluator
+from poker_core.rng import RNG
 
 SB = 1
 BB = 2
@@ -14,65 +16,74 @@ BB = 2
 Street = Literal["preflop", "flop", "turn", "river", "showdown", "complete"]
 
 
-def _rng(seed: Optional[int]) -> random.Random:
+def _rng(seed: int | None) -> random.Random:
     rng = RNG(seed=seed)
     return rng.create()
 
-def _shuffle(seed: Optional[int]) -> List[str]:
+
+def _shuffle(seed: int | None) -> list[str]:
     deck = make_deck()
     r = _rng(seed)
     r.shuffle(deck)
     return deck
 
+
 @dataclass(frozen=True)
 class Player:
     stack: int
-    hole: List[str]  # len==2 once dealt
+    hole: list[str]  # len==2 once dealt
     invested_street: int = 0  # 本街已投入
     all_in: bool = False
     folded: bool = False
+
 
 @dataclass(frozen=True)
 class GameState:
     session_id: str
     hand_id: str
-    button: int                    # 0 或 1，表示谁是按钮（SB 一定是按钮）
+    button: int  # 0 或 1，表示谁是按钮（SB 一定是按钮）
     street: Street
-    deck: List[str]
-    board: List[str]
-    players: Tuple[Player, Player] # 固定为座位顺序：seat0, seat1。角色由 button 推导
+    deck: list[str]
+    board: list[str]
+    players: tuple[Player, Player]  # 固定为座位顺序：seat0, seat1。角色由 button 推导
     sb: int
     bb: int
     pot: int
-    to_act: int                    # 当前行动者 index
-    last_bet: int                  # 本街最近一次投注额（用于 min raise 的简化）
+    to_act: int  # 当前行动者 index
+    last_bet: int  # 本街最近一次投注额（用于 min raise 的简化）
     # 便于 UI/教学的事件流（可写可不写，先给上）
-    events: List[Dict]
+    events: list[dict]
     open_bet: bool
     checks_in_round: int
-    last_raise_size: int = 0       # 上一次“加注的增量”（用于最小加注规则）
+    last_raise_size: int = 0  # 上一次“加注的增量”（用于最小加注规则）
 
-def start_session(init_stack: int = 200, sb: int = SB, bb: int = BB) -> Dict:
+
+def start_session(init_stack: int = 200, sb: int = SB, bb: int = BB) -> dict:
     """返回对局配置（教学化，最小字典即可），真实对局对象我们不落库。"""
     return {
-        "sb": sb, "bb": bb, "init_stack": init_stack,
+        "sb": sb,
+        "bb": bb,
+        "init_stack": init_stack,
     }
 
-def start_hand(session_cfg: Dict, session_id: str, hand_id: str, button: int, seed: Optional[int] = None) -> GameState:
+
+def start_hand(
+    session_cfg: dict, session_id: str, hand_id: str, button: int, seed: int | None = None
+) -> GameState:
     """
     按 HU 规则：
     - players 固定为座位顺序（seat0, seat1）；由 `button` 推导当手的 SB/BB
     - SB=按钮，BB=非按钮；盲注直接从 stack 扣，并计入本街 invested_street
     - preflop 行动权在 按钮（SB） 手上；翻后行动权在非按钮手上
     """
-    
+
     deck = _shuffle(seed)
     p0_hole = [deck[0], deck[2]]
     p1_hole = [deck[1], deck[3]]
     deck = deck[4:]
     init_stack = session_cfg["init_stack"]
     sb = int(session_cfg.get("sb", 1))
-    bb = int(session_cfg.get("bb", 2)) 
+    bb = int(session_cfg.get("bb", 2))
     btn = button % 2
 
     # 固定按座位创建玩家，随后根据 button 决定谁贴盲
@@ -96,28 +107,30 @@ def start_hand(session_cfg: Dict, session_id: str, hand_id: str, button: int, se
         pot=0,
         sb=sb,
         bb=bb,
-        to_act=btn,           # HU 规则：preflop 由按钮（SB）先行动
-        last_bet=bb,          # 视为当前最高注（BB），便于 min-raise 简化
+        to_act=btn,  # HU 规则：preflop 由按钮（SB）先行动
+        last_bet=bb,  # 视为当前最高注（BB），便于 min-raise 简化
         events=[],
         open_bet=True,
         checks_in_round=0,
-        last_raise_size=bb    # preflop 初始最小加注增量为 BB
+        last_raise_size=bb,  # preflop 初始最小加注增量为 BB
     )
     # 依据按钮记录盲注事件（who 为座位 index）
     sb_idx, bb_idx = btn, 1 - btn
-    gs.events.append({"t":"blind", "who":sb_idx, "amt":sb})
-    gs.events.append({"t":"blind", "who":bb_idx, "amt":bb})
-    gs.events.append({"t":"deal_hole", "p0":p0_hole, "p1":p1_hole})
+    gs.events.append({"t": "blind", "who": sb_idx, "amt": sb})
+    gs.events.append({"t": "blind", "who": bb_idx, "amt": bb})
+    gs.events.append({"t": "deal_hole", "p0": p0_hole, "p1": p1_hole})
     return gs
+
 
 def _to_call(gs: GameState, actor: int) -> int:
     me = gs.players[actor]
-    other = gs.players[1-actor]
+    other = gs.players[1 - actor]
     # 当前街最大投资额：
     cur_max = max(me.invested_street, other.invested_street)
     return cur_max - me.invested_street
 
-def legal_actions(gs: GameState) -> List[str]:
+
+def legal_actions(gs: GameState) -> list[str]:
     if gs.street in ("showdown", "complete"):
         return []
 
@@ -145,7 +158,10 @@ def legal_actions(gs: GameState) -> List[str]:
                 acts.append("bet")
             # preflop 仅盲注对齐后，BB 可在 to_call==0 时选择加注
             if (
-                gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and gs.to_act == (1 - gs.button)
+                gs.street == "preflop"
+                and gs.open_bet
+                and gs.last_bet == gs.bb
+                and gs.to_act == (1 - gs.button)
             ):
                 acts.append("raise")
             acts.append("allin")
@@ -160,19 +176,23 @@ def legal_actions(gs: GameState) -> List[str]:
 
     return acts
 
+
 def _replace_player(p: Player, **kw) -> Player:
     return replace(p, **kw)
+
 
 def _update_player(gs: GameState, idx: int, newp: Player) -> GameState:
     lst = list(gs.players)
     lst[idx] = newp
     return replace(gs, players=tuple(lst))
 
+
 def _street_first_to_act(gs: GameState) -> int:
     if gs.street == "preflop":
         return gs.button  # 按钮先手（HU 特例）
     else:
         return 1 - gs.button  # 翻后由非按钮先手
+
 
 def _deal_board(gs: GameState, street: Street) -> GameState:
     deck = list(gs.deck)
@@ -185,6 +205,7 @@ def _deal_board(gs: GameState, street: Street) -> GameState:
         board += [deck.pop(0)]
     return replace(gs, deck=deck, board=board)
 
+
 def _reset_street(gs: GameState, next_street: Street) -> GameState:
     # 把本街投资加入彩池，清零 invested_street，重置加注次数与行动权
     p0, p1 = gs.players
@@ -195,23 +216,25 @@ def _reset_street(gs: GameState, next_street: Street) -> GameState:
     gs = replace(gs, street=next_street)
     if next_street in ("flop", "turn", "river"):
         gs = _deal_board(gs, next_street)
-        gs.events.append({"t":"board", "street": next_street, "cards": list(gs.board)})
+        gs.events.append({"t": "board", "street": next_street, "cards": list(gs.board)})
     return replace(gs, to_act=_street_first_to_act(gs))
+
 
 def _both_satisfied(gs: GameState) -> bool:
     # 双方已对齐当前街注额，且最近一轮包含 check/check 或 bet/call
     p0, p1 = gs.players
     return p0.invested_street == p1.invested_street
 
+
 def _maybe_advance_street(gs: GameState) -> GameState:
     if gs.street in ("showdown", "complete"):
         return gs
-    
+
     def _advance(to: Street) -> GameState:
         new_gs = _reset_street(gs, to)
         # 进入新街时，回合状态清零
         return replace(new_gs, open_bet=False, checks_in_round=0)
-    
+
     # 优先处理：任意一方 all-in 且已对齐 → 自动一路推进到摊牌
     # 说明：若仅一方 all-in，另一方仍有余筹，但由于对手已 all-in，
     #       根据 HU 规则对手无法再进行新一轮下注/加注；因此在对齐后
@@ -222,7 +245,7 @@ def _maybe_advance_street(gs: GameState) -> GameState:
         # 连续推进直至摊牌
         while True:
             if cur.street in ("preflop", "flop", "turn"):
-                nxt = {"preflop":"flop", "flop":"turn", "turn":"river"}[cur.street]
+                nxt = {"preflop": "flop", "flop": "turn", "turn": "river"}[cur.street]
                 # 使用当前状态推进，保持 _advance 一致清理
                 gs = cur
                 cur = _reset_street(gs, nxt)
@@ -235,11 +258,11 @@ def _maybe_advance_street(gs: GameState) -> GameState:
                 break
             break
         return cur
-    
+
     if gs.street in ("preflop", "flop", "turn"):
         if gs.open_bet:
             if _both_satisfied(gs):
-                nxt = {"preflop":"flop", "flop":"turn", "turn":"river"}[gs.street]
+                nxt = {"preflop": "flop", "flop": "turn", "turn": "river"}[gs.street]
                 # Preflop 特例处理：
                 # - 若仅有盲注（last_bet == BB），SB 补齐后需要 BB 再 check 一次才关闭本街；
                 # - 若已出现主动 bet/raise（last_bet > BB），则 call 后可立即进入下一街。
@@ -252,19 +275,20 @@ def _maybe_advance_street(gs: GameState) -> GameState:
                     return _advance(nxt)
         else:
             if gs.checks_in_round >= 2:
-                nxt = {"preflop":"flop","flop":"turn","turn":"river"}[gs.street]
+                nxt = {"preflop": "flop", "flop": "turn", "turn": "river"}[gs.street]
                 return _advance(nxt)
     elif gs.street == "river":
         if gs.open_bet:
             if _both_satisfied(gs):
-                # 进摊牌    
+                # 进摊牌
                 return _advance("showdown")
         else:
             if gs.checks_in_round >= 2:
                 return _advance("showdown")
     return gs
 
-def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> GameState:
+
+def apply_action(gs: GameState, action: str, amount: int | None = None) -> GameState:
     """
     action ∈ {"check","fold","call","bet","raise","allin"}
     - bet/raise 需考虑最小额（简化：min = max(BB, to_call)）
@@ -272,46 +296,54 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
     """
     actor = gs.to_act
     me = gs.players[actor]
-    vill = gs.players[1-actor]
     to_call = _to_call(gs, actor)
 
     if action not in legal_actions(gs):
         raise ValueError(f"illegal action: {action}")
 
     if action == "check":
-        gs.events.append({"t":"check", "who":actor})
+        gs.events.append({"t": "check", "who": actor})
         # 交换行动者；若对齐则可能进下一街
-        gs = replace(gs, checks_in_round=gs.checks_in_round + 1, to_act=1-actor)
+        gs = replace(gs, checks_in_round=gs.checks_in_round + 1, to_act=1 - actor)
         return _maybe_advance_street(gs)
 
     if action == "fold":
         me = _replace_player(me, folded=True)
         gs = _update_player(gs, actor, me)
-        gs.events.append({"t":"fold", "who":actor})
+        gs.events.append({"t": "fold", "who": actor})
         # 直接结算到 complete（弃牌胜利）
-        return _settle_fold(gs, winner=1-actor)
+        return _settle_fold(gs, winner=1 - actor)
 
     if action == "call":
         pay = min(me.stack, to_call)
-        me = _replace_player(me, stack=me.stack - pay, invested_street=me.invested_street + pay, all_in=(me.stack - pay == 0))
+        me = _replace_player(
+            me,
+            stack=me.stack - pay,
+            invested_street=me.invested_street + pay,
+            all_in=(me.stack - pay == 0),
+        )
         gs = _update_player(gs, actor, me)
 
         # 若不足额跟注（pay < to_call），退还对手未被匹配的部分
         if pay < to_call:
             over = to_call - pay
-            opp = gs.players[1-actor]
+            opp = gs.players[1 - actor]
             # 确保不退还超过对手已投资的金额（防御性编程）
             actual_refund = min(over, opp.invested_street)
-            opp = _replace_player(opp, invested_street=opp.invested_street - actual_refund, stack=opp.stack + actual_refund)
-            gs = _update_player(gs, 1-actor, opp)
-            gs.events.append({"t":"call_short", "who":actor, "amt":pay, "refund":actual_refund})
-            gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+            opp = _replace_player(
+                opp,
+                invested_street=opp.invested_street - actual_refund,
+                stack=opp.stack + actual_refund,
+            )
+            gs = _update_player(gs, 1 - actor, opp)
+            gs.events.append({"t": "call_short", "who": actor, "amt": pay, "refund": actual_refund})
+            gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
             return _maybe_advance_street(gs)
 
         # 精确跟注或常规跟注
-        gs.events.append({"t":"call", "who":actor, "amt":pay})
+        gs.events.append({"t": "call", "who": actor, "amt": pay})
         # call 保持本回合已有下注状态（open_bet 维持 True），并清空本轮 check 计数
-        gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+        gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
         return _maybe_advance_street(gs)
 
     if action == "bet":
@@ -323,17 +355,33 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
         bet = amount if amount is not None else min_bet
         bet = max(min_bet, bet)
         bet = min(bet, me.stack)  # all-in 也算 bet
-        me = _replace_player(me, stack=me.stack - bet, invested_street=me.invested_street + bet, all_in=(me.stack - bet == 0))
+        me = _replace_player(
+            me,
+            stack=me.stack - bet,
+            invested_street=me.invested_street + bet,
+            all_in=(me.stack - bet == 0),
+        )
         gs = _update_player(gs, actor, me)
-        gs.events.append({"t":"bet", "who":actor, "amt":bet})
-        gs = replace(gs, last_bet=bet, last_raise_size=bet, to_act=1-actor, open_bet=True, checks_in_round=0)
+        gs.events.append({"t": "bet", "who": actor, "amt": bet})
+        gs = replace(
+            gs,
+            last_bet=bet,
+            last_raise_size=bet,
+            to_act=1 - actor,
+            open_bet=True,
+            checks_in_round=0,
+        )
         return gs
 
     if action == "raise":
         # 常规：已有下注/加注（to_call>0）；
         # 特例：preflop 仅盲注对齐后（open_bet=True 且 last_bet==BB）且轮到 BB，to_call==0 也允许加注。
         preflop_blind_raise = (
-            gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and to_call == 0 and actor == (1 - gs.button)
+            gs.street == "preflop"
+            and gs.open_bet
+            and gs.last_bet == gs.bb
+            and to_call == 0
+            and actor == (1 - gs.button)
         )
         if not preflop_blind_raise:
             assert to_call > 0
@@ -348,22 +396,26 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
             total_put = actual_add
         else:
             total_put = to_call + actual_add
-        all_in_flag = (total_put == me.stack) if preflop_blind_raise else (total_put == me.stack)
-        me = _replace_player(me, stack=me.stack - total_put, invested_street=me.invested_street + total_put, all_in=(me.stack - total_put == 0))
+        me = _replace_player(
+            me,
+            stack=me.stack - total_put,
+            invested_street=me.invested_street + total_put,
+            all_in=(me.stack - total_put == 0),
+        )
         gs = _update_player(gs, actor, me)
-        gs.events.append({"t":"raise", "who":actor, "to":me.invested_street})
+        gs.events.append({"t": "raise", "who": actor, "to": me.invested_street})
         # 若实际加注未达到最小增量，则按“跟注/不足额加注”处理：不更新 last_bet/last_raise_size（不重开行动）
         if actual_add >= min_inc:
             gs = replace(
                 gs,
                 last_bet=gs.last_bet + actual_add,
                 last_raise_size=actual_add,
-                to_act=1-actor,
+                to_act=1 - actor,
                 open_bet=True,
                 checks_in_round=0,
             )
         else:
-            gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+            gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
         return gs
 
     if action == "allin":
@@ -374,24 +426,38 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
         if to_call == 0:
             if not gs.open_bet:
                 # 作为开火下注
-                me = _replace_player(me, stack=0, invested_street=me.invested_street + push, all_in=True)
+                me = _replace_player(
+                    me, stack=0, invested_street=me.invested_street + push, all_in=True
+                )
                 gs = _update_player(gs, actor, me)
-                gs.events.append({"t":"allin", "who":actor, "amt":push, "as":"bet"})
-                gs = replace(gs, last_bet=push, last_raise_size=push, to_act=1-actor, open_bet=True, checks_in_round=0)
+                gs.events.append({"t": "allin", "who": actor, "amt": push, "as": "bet"})
+                gs = replace(
+                    gs,
+                    last_bet=push,
+                    last_raise_size=push,
+                    to_act=1 - actor,
+                    open_bet=True,
+                    checks_in_round=0,
+                )
                 return gs
             # preflop 仅盲注对齐时 BB 的 all-in 视为 raise（需达到最小加注增量）
             preflop_blind_raise = (
-                gs.street == "preflop" and gs.open_bet and gs.last_bet == gs.bb and actor == (1 - gs.button)
+                gs.street == "preflop"
+                and gs.open_bet
+                and gs.last_bet == gs.bb
+                and actor == (1 - gs.button)
             )
             if preflop_blind_raise:
                 min_inc = max(1, gs.last_raise_size)
                 actual_add = push
-                me = _replace_player(me, stack=0, invested_street=me.invested_street + push, all_in=True)
+                me = _replace_player(
+                    me, stack=0, invested_street=me.invested_street + push, all_in=True
+                )
                 gs = _update_player(gs, actor, me)
-                gs.events.append({"t":"allin", "who":actor, "amt":push, "as":"raise"})
+                gs.events.append({"t": "allin", "who": actor, "amt": push, "as": "raise"})
                 if actual_add >= min_inc:
                     gs = replace(gs, last_bet=gs.last_bet + actual_add, last_raise_size=actual_add)
-                gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+                gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
                 return gs
             # 其他 to_call==0 且已开火的情形：不可 all-in 加注（HU 对手必须能响应）。视为非法
             raise ValueError("cannot all-in without open bet or blind-raise option")
@@ -400,37 +466,45 @@ def apply_action(gs: GameState, action: str, amount: Optional[int] = None) -> Ga
             pay = min(push, to_call)
             remaining = push - pay
             # 更新自己为 all-in
-            me = _replace_player(me, stack=0, invested_street=me.invested_street + push, all_in=True)
+            me = _replace_player(
+                me, stack=0, invested_street=me.invested_street + push, all_in=True
+            )
             gs = _update_player(gs, actor, me)
             # 若不足额跟注（pay < to_call），退还对手未被匹配的部分
             if pay < to_call:
                 over = to_call - pay
-                opp = gs.players[1-actor]
-                opp = _replace_player(opp, invested_street=opp.invested_street - over, stack=opp.stack + over)
-                gs = _update_player(gs, 1-actor, opp)
-                gs.events.append({"t":"allin", "who":actor, "amt":push, "as":"call_short", "refund":over})
-                gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+                opp = gs.players[1 - actor]
+                opp = _replace_player(
+                    opp, invested_street=opp.invested_street - over, stack=opp.stack + over
+                )
+                gs = _update_player(gs, 1 - actor, opp)
+                gs.events.append(
+                    {"t": "allin", "who": actor, "amt": push, "as": "call_short", "refund": over}
+                )
+                gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
                 return _maybe_advance_street(gs)
             # 精确跟注（push == to_call）
             if remaining == 0:
-                gs.events.append({"t":"allin", "who":actor, "amt":push, "as":"call"})
-                gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+                gs.events.append({"t": "allin", "who": actor, "amt": push, "as": "call"})
+                gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
                 return _maybe_advance_street(gs)
             # 超额部分视为加注增量
             min_inc = max(1, gs.last_raise_size)
             actual_add = remaining
-            gs.events.append({"t":"allin", "who":actor, "amt":push, "as":"raise"})
+            gs.events.append({"t": "allin", "who": actor, "amt": push, "as": "raise"})
             if actual_add >= min_inc:
                 gs = replace(gs, last_bet=gs.last_bet + actual_add, last_raise_size=actual_add)
-            gs = replace(gs, to_act=1-actor, open_bet=True, checks_in_round=0)
+            gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
             return _maybe_advance_street(gs)
 
     raise RuntimeError("unreachable")
 
-def _hand_strength(cards7: List[str]) -> Strength:
+
+def _hand_strength(cards7: list[str]) -> Strength:
     # 使用 providers 适配层：优先调用 pokerkit，否则回退到简化强度
     hole, board = cards7[:2], cards7[2:]
     return get_evaluator().evaluate7(hole, board).strength
+
 
 def _settle_fold(gs: GameState, winner: int) -> GameState:
     # 把当前街筹码与彩池清算给赢家
@@ -443,20 +517,24 @@ def _settle_fold(gs: GameState, winner: int) -> GameState:
     else:
         p1 = _replace_player(p1, stack=p1.stack + pot_total, invested_street=0)
         p0 = _replace_player(p0, invested_street=0)
-    gs = replace(gs, players=(p0,p1), pot=0, street="complete", to_act=-1)
-    gs.events.append({"t":"win_fold", "who":winner, "amt":pot_total})
+    gs = replace(gs, players=(p0, p1), pot=0, street="complete", to_act=-1)
+    gs.events.append({"t": "win_fold", "who": winner, "amt": pot_total})
     return gs
 
-def _showdown_eval(gs: GameState) -> Tuple[Optional[int], bool, List[List[str]]]:
+
+def _showdown_eval(gs: GameState) -> tuple[int | None, bool, list[list[str]]]:
     # 返回 (winner_index or None for tie, is_tie, [hole_cards_for_each_player])
     ev = get_evaluator()
     p0, p1 = gs.players
     r0 = ev.evaluate7(p0.hole, gs.board)
     r1 = ev.evaluate7(p1.hole, gs.board)
     s0, s1 = r0.strength, r1.strength
-    if s0 > s1: return (0, False, [r0.best5, r1.best5])
-    if s1 > s0: return (1, False, [r1.best5, r0.best5])
+    if s0 > s1:
+        return (0, False, [r0.best5, r1.best5])
+    if s1 > s0:
+        return (1, False, [r1.best5, r0.best5])
     return (None, True, [r0.best5, r1.best5])
+
 
 def settle_if_needed(gs: GameState) -> GameState:
     # 在 river 对齐后会进入 "showdown"；这里完成摊牌并派彩
@@ -467,27 +545,37 @@ def settle_if_needed(gs: GameState) -> GameState:
     pot_total = gs.pot + p0.invested_street + p1.invested_street
     p0 = _replace_player(p0, invested_street=0)
     p1 = _replace_player(p1, invested_street=0)
-    gs = replace(gs, pot=0, players=(p0,p1))
+    gs = replace(gs, pot=0, players=(p0, p1))
 
     winner, tie, best5 = _showdown_eval(gs)
-    gs.events.append({"t": "showdown", "winner": winner, "is_tie": tie, "best5": best5, "board": list(gs.board)})
+    gs.events.append(
+        {"t": "showdown", "winner": winner, "is_tie": tie, "best5": best5, "board": list(gs.board)}
+    )
 
     if tie:
-        p0 = _replace_player(gs.players[0], stack=gs.players[0].stack + pot_total//2)
-        p1 = _replace_player(gs.players[1], stack=gs.players[1].stack + pot_total - pot_total//2)
-        gs = replace(gs, players=(p0,p1))
-        gs.events.append({"t":"split", "amt":pot_total})
+        p0 = _replace_player(gs.players[0], stack=gs.players[0].stack + pot_total // 2)
+        p1 = _replace_player(gs.players[1], stack=gs.players[1].stack + pot_total - pot_total // 2)
+        gs = replace(gs, players=(p0, p1))
+        gs.events.append({"t": "split", "amt": pot_total})
     else:
         pw = gs.players[winner]
         pw = _replace_player(pw, stack=pw.stack + pot_total)
-        lst = list(gs.players); lst[winner]=pw
+        lst = list(gs.players)
+        lst[winner] = pw
         gs = replace(gs, players=tuple(lst))
-        gs.events.append({"t":"win_showdown", "who":winner, "amt":pot_total})
+        gs.events.append({"t": "win_showdown", "who": winner, "amt": pot_total})
 
     return replace(gs, street="complete", to_act=-1)
 
-def start_hand_with_carry(cfg, session_id: str, hand_id: str, button: int,
-                          stacks: Tuple[int, int], seed: int | None = None):
+
+def start_hand_with_carry(
+    cfg,
+    session_id: str,
+    hand_id: str,
+    button: int,
+    stacks: tuple[int, int],
+    seed: int | None = None,
+):
     """
     在沿用上一手 stacks 的前提下开新手。
     - 不改变原 start_hand 的签名/行为，避免破坏现有调用点。
@@ -503,4 +591,3 @@ def start_hand_with_carry(cfg, session_id: str, hand_id: str, button: int,
     p1 = replace(gs.players[1], stack=s1 - inv1)
     gs = replace(gs, players=(p0, p1))
     return gs
-

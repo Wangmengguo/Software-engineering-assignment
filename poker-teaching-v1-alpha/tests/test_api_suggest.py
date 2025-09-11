@@ -1,6 +1,8 @@
 import json
+
 import pytest
 from django.test import Client
+
 
 def _post(c: Client, url: str, payload: dict):
     return c.post(url, data=json.dumps(payload), content_type="application/json")
@@ -35,7 +37,11 @@ def test_suggest_ok_returns_legal_action(client: Client):
     amount = body["suggested"].get("amount", None)
     assert action in {"fold", "check", "call", "bet", "raise"}
     # 必须在当前合法动作集合内
-    assert (action in legal) or (action == "bet" and "bet" in legal) or (action == "raise" and "raise" in legal)
+    assert (
+        (action in legal)
+        or (action == "bet" and "bet" in legal)
+        or (action == "raise" and "raise" in legal)
+    )
     if amount is not None:
         assert isinstance(amount, int) and amount >= 1
 
@@ -72,4 +78,3 @@ def test_suggest_404_when_hand_not_found(client: Client):
     r = _post(client, "/api/v1/suggest", {"hand_id": "not_exist", "actor": 0})
     assert r.status_code == 404
     assert "detail" in r.json()
-

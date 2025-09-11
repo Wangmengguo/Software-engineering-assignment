@@ -1,5 +1,6 @@
 # tests/conftest.py
-import os, sys
+import os
+import sys
 from pathlib import Path
 
 # 项目根目录：tests/ 的上一级
@@ -13,6 +14,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
 
 try:
     import django
+
     django.setup()
 except Exception:
     pass

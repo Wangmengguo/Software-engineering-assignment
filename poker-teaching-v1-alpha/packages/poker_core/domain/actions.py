@@ -1,25 +1,26 @@
 # packages/poker_core/domain/actions.py
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Literal, Optional
+
 import copy
+from dataclasses import dataclass
+from typing import Literal
 
 # 引擎自由函数接口
-from poker_core.state_hu import (
-    legal_actions as core_legal_actions,
-    apply_action as core_apply_action,
-)
+from poker_core.state_hu import apply_action as core_apply_action
+from poker_core.state_hu import legal_actions as core_legal_actions
 
 ActionName = Literal["fold", "check", "call", "bet", "raise", "allin"]
+
 
 @dataclass
 class LegalAction:
     action: ActionName
     # 仅当 action in {"bet","raise"} 时有效
-    min: Optional[int] = None
-    max: Optional[int] = None
+    min: int | None = None
+    max: int | None = None
     # 仅当 action == "call" 时有效
-    to_call: Optional[int] = None
+    to_call: int | None = None
+
 
 def to_act_index(gs) -> int:
     """统一行动者获取入口。对齐 gs.to_act : 0/1。"""
@@ -28,7 +29,8 @@ def to_act_index(gs) -> int:
         raise ValueError("Invalid gs.to_act; expected 0 or 1")
     return actor
 
-def _simulate_apply(gs, action: ActionName, amount: Optional[int] = None) -> bool:
+
+def _simulate_apply(gs, action: ActionName, amount: int | None = None) -> bool:
     """在原始 gs 上尝试执行动作（引擎为纯函数返回新状态，输入不变）。"""
     try:
         # 深拷贝以避免修改原始状态（特别是 events 列表）
@@ -41,7 +43,8 @@ def _simulate_apply(gs, action: ActionName, amount: Optional[int] = None) -> boo
     except Exception:
         return False
 
-def _binary_search_min(gs, action: ActionName, lo: int, hi: int) -> Optional[int]:
+
+def _binary_search_min(gs, action: ActionName, lo: int, hi: int) -> int | None:
     ans = None
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -52,7 +55,8 @@ def _binary_search_min(gs, action: ActionName, lo: int, hi: int) -> Optional[int
             lo = mid + 1
     return ans
 
-def _binary_search_max(gs, action: ActionName, lo: int, hi: int) -> Optional[int]:
+
+def _binary_search_max(gs, action: ActionName, lo: int, hi: int) -> int | None:
     ans = None
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -62,13 +66,15 @@ def _binary_search_max(gs, action: ActionName, lo: int, hi: int) -> Optional[int
         else:
             hi = mid - 1
     return ans
+
 
 def _compute_to_call(gs, actor: int) -> int:
     me = gs.players[actor]
     other = gs.players[1 - actor]
     return max(other.invested_street - me.invested_street, 0)
 
-def legal_actions_struct(gs) -> List[LegalAction]:
+
+def legal_actions_struct(gs) -> list[LegalAction]:
     """
     返回结构化合法动作列表：
     - bet/raise 附带 [min, max]
@@ -76,8 +82,8 @@ def legal_actions_struct(gs) -> List[LegalAction]:
     - 仅返回真实可执行的动作（通过模拟 apply 探测边界）
     """
     # 使用引擎自由函数获取字符串动作集合
-    str_acts: List[str] = list(core_legal_actions(gs))
-    result: List[LegalAction] = []
+    str_acts: list[str] = list(core_legal_actions(gs))
+    result: list[LegalAction] = []
 
     actor = to_act_index(gs)
     bb = int(getattr(gs, "bb", 50))
@@ -104,6 +110,7 @@ def legal_actions_struct(gs) -> List[LegalAction]:
 
     return result
 
+
 # 兼容旧签名：返回 List[str]（由引擎提供）
-def legal_actions(gs) -> List[str]:
+def legal_actions(gs) -> list[str]:
     return list(core_legal_actions(gs))

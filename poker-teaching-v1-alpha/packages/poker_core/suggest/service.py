@@ -1,16 +1,33 @@
 # packages/poker_core/suggest/service.py
 from __future__ import annotations
-from typing import Dict, Any, List, Tuple, Optional, Callable
 
-from ..domain.actions import to_act_index, legal_actions_struct, LegalAction
+import logging
+import os
+from collections.abc import Callable
+from typing import Any
+
 from ..analysis import annotate_player_hand_from_gs
-from .policy import policy_preflop_v0, policy_postflop_v0_3
+from ..domain.actions import LegalAction, legal_actions_struct, to_act_index
+from .codes import SCodes
+from .codes import mk_rationale as R
+from .policy import policy_postflop_v0_3, policy_preflop_v0, policy_preflop_v1
+from .preflop_tables import (
+    combo_from_hole,
+    config_profile_name,
+    config_strategy_name,
+    get_modes,
+    get_open_table,
+    get_vs_table,
+)
 from .types import Observation, PolicyConfig
-from .utils import to_call_from_acts
-from .codes import SCodes, mk_rationale as R
+from .utils import calc_spr, classify_flop, drop_nones, stable_roll, to_call_from_acts
+from .utils import is_ip as _is_ip
+from .utils import spr_bucket as _spr_bucket
 
 
-def _clamp_amount_if_needed(suggested: Dict[str, Any], acts: List[LegalAction]) -> Tuple[Dict[str, Any], bool, Dict[str, Optional[int]]]:
+def _clamp_amount_if_needed(
+    suggested: dict[str, Any], acts: list[LegalAction]
+) -> tuple[dict[str, Any], bool, dict[str, int | None]]:
     """将建议金额钳制到合法区间，并返回是否发生钳制及边界信息。"""
     name = suggested.get("action")
     if name not in {"bet", "raise", "allin"}:
@@ -25,27 +42,64 @@ def _clamp_amount_if_needed(suggested: Dict[str, Any], acts: List[LegalAction]) 
     hi = spec.max if spec.max is not None else int(amt)
     if lo is None or hi is None:
         return suggested, False, {"min": None, "max": None, "given": int(amt), "chosen": int(amt)}
-    clamped_val = max(lo, min(int(amt), hi))
+    # 处理异常窗口：min > max（例如上游引擎的边界不一致）。
+    # 为了确保打出服务层钳制信号，这里强制将金额压到 hi，并视为 clamped。
+    if int(lo) > int(hi):
+        clamped_val = int(hi)
+        s2 = dict(suggested)
+        s2["amount"] = clamped_val
+        return (
+            s2,
+            True,
+            {"min": int(lo), "max": int(hi), "given": int(amt), "chosen": int(clamped_val)},
+        )
+    clamped_val = max(int(lo), min(int(amt), int(hi)))
     if clamped_val != amt:
         s2 = dict(suggested)
         s2["amount"] = clamped_val
-        return s2, True, {"min": int(lo), "max": int(hi), "given": int(amt), "chosen": int(clamped_val)}
+        return (
+            s2,
+            True,
+            {"min": int(lo), "max": int(hi), "given": int(amt), "chosen": int(clamped_val)},
+        )
     return suggested, False, {"min": int(lo), "max": int(hi), "given": int(amt), "chosen": int(amt)}
 
 
-# 策略注册表：按 street 选择
-PolicyFn = Callable[[Observation, PolicyConfig], Tuple[Dict[str, Any], List[Dict[str, Any]], str]]
-POLICY_REGISTRY: Dict[str, PolicyFn] = {
+# 策略注册表（按版本/街选择）。PR-0：v1 映射到 v0 占位，保证行为不变。
+PolicyFn = Callable[[Observation, PolicyConfig], tuple[dict[str, Any], list[dict[str, Any]], str]]
+POLICY_REGISTRY_V0: dict[str, PolicyFn] = {
     "preflop": policy_preflop_v0,
     "flop": policy_postflop_v0_3,
     "turn": policy_postflop_v0_3,
     "river": policy_postflop_v0_3,
 }
+POLICY_REGISTRY_V1: dict[str, PolicyFn] = {
+    "preflop": policy_preflop_v1,
+    "flop": policy_postflop_v0_3,
+    "turn": policy_postflop_v0_3,
+    "river": policy_postflop_v0_3,
+}
+
+# Backward-compat alias for tests/importers
+POLICY_REGISTRY: dict[str, PolicyFn] = POLICY_REGISTRY_V0
 
 
-def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Tuple[Observation, List[Dict[str, Any]]]:
+def _choose_policy_version(hand_id: str) -> str:
+    """返回 'v0' 或 'v1'（PR-0 中 v1 与 v0 行为一致，仅用于灰度管控与调试展示）。"""
+    mode = (os.getenv("SUGGEST_POLICY_VERSION") or "v0").strip().lower()
+    if mode in {"v0", "v1", "v1_preflop"}:  # v1_preflop 在 PR-0 等同 v1
+        return "v1" if mode != "v0" else "v0"
+    if mode == "auto":
+        pct = int(os.getenv("SUGGEST_V1_ROLLOUT_PCT") or 0)
+        return "v1" if stable_roll(hand_id or "", pct) else "v0"
+    return "v0"
+
+
+def _build_observation(
+    gs, actor: int, acts: list[LegalAction]
+) -> tuple[Observation, list[dict[str, Any]]]:
     # 从 analysis 取 tags/hand_class（失败时降级 unknown）
-    pre_rationale: List[Dict[str, Any]] = []
+    pre_rationale: list[dict[str, Any]] = []
     try:
         ann = annotate_player_hand_from_gs(gs, actor)
         info = ann.get("info", {})
@@ -61,6 +115,31 @@ def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Tuple[Observa
     pot = int(getattr(gs, "pot", 0))
     to_call = int(to_call_from_acts(acts))
 
+    # v1 扩展：table_mode/ip/texture/spr
+    table_mode = (os.getenv("SUGGEST_TABLE_MODE") or "HU").upper()
+    try:
+        button = int(getattr(gs, "button", 0))
+    except Exception:
+        button = 0
+    texture = classify_flop(getattr(gs, "board", []) or [])
+    # 决策点 SPR：pot_now = pot + invested_street_sum
+    try:
+        p0 = getattr(gs, "players")[0]
+        p1 = getattr(gs, "players")[1]
+        invested = int(getattr(p0, "invested_street", 0)) + int(getattr(p1, "invested_street", 0))
+        # Invariant: pot_now is the current pot excluding hero's pending to_call
+        # (includes blinds and opponent's invested chips, but not the hero's next call amount).
+        # Pot odds must be computed as: to_call / (pot_now + to_call).
+        pot_now = pot + invested
+        eff_stack = min(
+            int(getattr(p0, "stack", 0)) if actor == 0 else int(getattr(p1, "stack", 0)),
+            int(getattr(p1, "stack", 0)) if actor == 0 else int(getattr(p0, "stack", 0)),
+        )
+        spr_val = calc_spr(pot_now, eff_stack)
+        spr_bkt = _spr_bucket(spr_val)
+    except Exception:
+        spr_bkt = "na"
+
     obs = Observation(
         hand_id=hand_id,
         actor=int(actor),
@@ -71,11 +150,20 @@ def _build_observation(gs, actor: int, acts: List[LegalAction]) -> Tuple[Observa
         acts=acts,
         tags=tags,
         hand_class=str(hand_class),
+        table_mode=table_mode,
+        spr_bucket=spr_bkt,
+        board_texture=str(texture.get("texture", "na")),
+        ip=_is_ip(actor, table_mode, button, street),
+        pot_now=int(locals().get("pot_now", pot)),
+        combo=(
+            combo_from_hole(getattr(getattr(gs, "players", [None, None])[actor], "hole", []) or [])
+            or ""
+        ),
     )
     return obs, pre_rationale
 
 
-def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict[str, Any]:
+def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[str, Any]:
     """Suggest 入口（纯函数策略版）。
 
     契约：
@@ -95,14 +183,21 @@ def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict
     # 组装 Observation
     obs, pre_rationale = _build_observation(gs, actor, acts)
 
-    # 选择策略
-    policy_fn = POLICY_REGISTRY.get(obs.street)
-    if policy_fn is None:
-        policy_fn = policy_preflop_v0 if obs.street == "preflop" else policy_postflop_v0_3
+    # 选择策略（按版本 + 街）
+    version = _choose_policy_version(str(getattr(gs, "hand_id", "")))
+    reg = POLICY_REGISTRY_V1 if version == "v1" else POLICY_REGISTRY_V0
+    policy_fn = reg.get(obs.street) or (
+        policy_preflop_v0 if obs.street == "preflop" else policy_postflop_v0_3
+    )
 
     # 执行策略
     cfg = cfg or PolicyConfig()
-    suggested, rationale, policy_name = policy_fn(obs, cfg)
+    out = policy_fn(obs, cfg)
+    if isinstance(out, tuple) and len(out) == 4:
+        suggested, rationale, policy_name, meta_from_policy = out  # type: ignore
+    else:
+        suggested, rationale, policy_name = out  # type: ignore
+        meta_from_policy = {}
     # 注入预先的告警（例如分析缺失）
     if pre_rationale:
         rationale = list(pre_rationale) + list(rationale or [])
@@ -117,10 +212,129 @@ def build_suggestion(gs, actor: int, cfg: Optional[PolicyConfig] = None) -> Dict
     if clamped:
         rationale.append(R(SCodes.WARN_CLAMPED, data=clamp_info))
 
-    return {
+    # 兼容 + 扩展返回
+    resp: dict[str, Any] = {
         "hand_id": getattr(gs, "hand_id", None),
         "actor": actor,
         "suggested": suggested2,
         "rationale": rationale,
         "policy": policy_name,
+        "confidence": 0.5,
     }
+
+    # meta 仅在有值时返回；由策略层提供
+    meta_clean = drop_nones(dict(meta_from_policy or {}))
+    if meta_clean:
+        resp["meta"] = meta_clean
+
+    # Compute confidence after clamp, based on rationale codes
+    try:
+        codes = {str((r or {}).get("code")) for r in (rationale or [])}
+        hit_range = any(
+            c in {"PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET", "PF_DEFEND_PRICE_OK"} for c in codes
+        )
+        price_or_size_ok = any(
+            c in {"PF_DEFEND_PRICE_OK", "PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET"} for c in codes
+        )
+        fallback = any(
+            c in {"CFG_FALLBACK_USED", "PF_NO_LEGAL_RAISE", "PF_LIMP_COMPLETE_BLIND"} for c in codes
+        )
+        base = (
+            0.5
+            + (0.3 if hit_range else 0.0)
+            + (0.2 if price_or_size_ok else 0.0)
+            - (0.1 if clamped else 0.0)
+            - (0.1 if fallback else 0.0)
+        )
+        resp["confidence"] = max(0.5, min(0.9, base))
+    except Exception:
+        pass
+
+    if (os.getenv("SUGGEST_DEBUG") or "0") == "1":
+        # config versions for quick diagnosis
+        _, ver_open = get_open_table()
+        _, ver_vs = get_vs_table()
+        _, ver_modes = get_modes()
+        cfg_versions = {
+            "open": int(ver_open or 0),
+            "vs": int(ver_vs or 0),
+            "modes": int(ver_modes or 0),
+        }
+        profile = config_profile_name()
+        # debug units/deriveds for preflop v1 troubleshooting
+        try:
+            to_call_bb_dbg = float(obs.to_call) / float(obs.bb) if obs.bb else 0.0
+            open_to_bb_dbg = (
+                to_call_bb_dbg + 1.0 if obs.to_call and obs.street == "preflop" else None
+            )
+            pot_odds_dbg = (
+                (float(obs.to_call) / float(obs.pot_now + obs.to_call))
+                if (obs.pot_now + obs.to_call) > 0
+                else None
+            )
+            r2bb_dbg = None
+            r2amt_dbg = None
+            if resp.get("policy") == "preflop_v1":
+                r2bb_dbg = (resp.get("meta") or {}).get("reraise_to_bb")
+                if (resp.get("suggested") or {}).get("action") == "raise":
+                    r2amt_dbg = (resp.get("suggested") or {}).get("amount")
+        except Exception:
+            to_call_bb_dbg = None
+            open_to_bb_dbg = None
+            pot_odds_dbg = None
+            r2bb_dbg = None
+            r2amt_dbg = None
+        debug_meta = {
+            "policy_version": version,
+            "table_mode": obs.table_mode,
+            "spr_bucket": obs.spr_bucket,
+            "board_texture": obs.board_texture,
+            "rollout_pct": int(os.getenv("SUGGEST_V1_ROLLOUT_PCT") or 0),
+            "rolled_to_v1": (version == "v1"),
+            "config_versions": cfg_versions,
+            "config_profile": profile,
+            "strategy": config_strategy_name(),
+            # units
+            "to_call_bb": to_call_bb_dbg,
+            "open_to_bb": open_to_bb_dbg,
+            "pot_odds": None if pot_odds_dbg is None else round(pot_odds_dbg, 6),
+            "reraise_to_bb": r2bb_dbg,
+            "reraise_to_amount": r2amt_dbg,
+            "fourbet_to_bb": (resp.get("meta") or {}).get("fourbet_to_bb"),
+            "cap_bb": (resp.get("meta") or {}).get("cap_bb"),
+            "bucket": (resp.get("meta") or {}).get("bucket"),
+        }
+        resp["debug"] = {"meta": debug_meta}
+
+    # Structured log for v1 (or when debug enabled), including profile
+    try:
+        log = logging.getLogger(__name__)
+        if version == "v1" or (os.getenv("SUGGEST_DEBUG") or "0") == "1":
+            action = str(resp.get("suggested", {}).get("action", ""))
+            amount = resp.get("suggested", {}).get("amount")
+            log.info(
+                "suggest_v1",
+                extra={
+                    "policy_name": policy_name,
+                    "street": obs.street,
+                    "action": action,
+                    "amount": amount,
+                    "config_profile": resp.get("debug", {}).get("meta", {}).get("config_profile"),
+                    "strategy": config_strategy_name(),
+                    "rolled_to_v1": (version == "v1"),
+                    "confidence": resp.get("confidence"),
+                    "to_call_bb": float(obs.to_call) / float(obs.bb) if obs.bb else None,
+                    "pot_odds": (
+                        (float(obs.to_call) / float(obs.pot_now + obs.to_call))
+                        if (obs.pot_now + obs.to_call) > 0
+                        else None
+                    ),
+                    "threebet_to_bb": (resp.get("meta") or {}).get("reraise_to_bb"),
+                    "fourbet_to_bb": (resp.get("meta") or {}).get("fourbet_to_bb"),
+                    "bucket": (resp.get("meta") or {}).get("bucket"),
+                },
+            )
+    except Exception:
+        pass
+
+    return drop_nones(resp)

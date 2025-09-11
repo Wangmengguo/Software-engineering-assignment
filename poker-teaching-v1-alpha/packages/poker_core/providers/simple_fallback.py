@@ -2,9 +2,12 @@
 提供一个简单的启发式评估器，用于在 PokerKit 不可用时 fallback。
 """
 
-from typing import Sequence
-from .interfaces import HandEvaluator, EvalResult, Strength
-from poker_core.cards import parse_card, get_rank_value
+from collections.abc import Sequence
+
+from poker_core.cards import get_rank_value, parse_card
+
+from .interfaces import EvalResult, HandEvaluator, Strength
+
 
 def _score7(hole: Sequence[str], board: Sequence[str]) -> tuple[int, list[str]]:
     # 教学启发式：取7张里按 rank 值最高的5张求和，返回(分数, 最佳五张)
@@ -14,6 +17,7 @@ def _score7(hole: Sequence[str], board: Sequence[str]) -> tuple[int, list[str]]:
     best5 = cards_sorted[:5]
     score = sum(get_rank_value(parse_card(c)[0]) for c in best5)
     return score, best5
+
 
 class SimpleFallbackEvaluator(HandEvaluator):
     def evaluate7(self, hole, board):
