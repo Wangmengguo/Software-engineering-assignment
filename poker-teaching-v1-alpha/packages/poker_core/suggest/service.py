@@ -207,6 +207,21 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
     if suggested.get("action") not in names:
         raise ValueError("Policy produced illegal action")
 
+    # SB 补盲（limp）时确保附带解释码（防止上游遗漏）
+    try:
+        if (
+            obs.street == "preflop"
+            and suggested.get("action") == "call"
+            and not bool(obs.ip)  # SB preflop 为 OOP
+            and int(obs.to_call or 0) <= int(obs.bb or 0)
+        ):
+            rationale = list(rationale or [])
+            codes = {str((r or {}).get("code")) for r in rationale}
+            if "PF_LIMP_COMPLETE_BLIND" not in codes:
+                rationale.append(R(SCodes.PF_LIMP_COMPLETE_BLIND))
+    except Exception:
+        pass
+
     # 越界金额钳制 + 告警
     suggested2, clamped, clamp_info = _clamp_amount_if_needed(suggested, acts)
     if clamped:
