@@ -566,3 +566,19 @@ def test_config_versions_debug_and_profile(monkeypatch):
     assert r.get("debug", {}).get("meta", {}).get("config_profile") == "loose"
     cfgv = r["debug"]["meta"]["config_versions"]
     assert {"open", "vs", "modes"}.issubset(cfgv.keys())
+
+
+def test_sb_limp_complete_has_rationale(monkeypatch):
+    # Ensure SB limp-complete always carries PF_LIMP_COMPLETE_BLIND rationale
+    _set_env(monkeypatch, debug=1)
+    bb = 50
+    p0 = _P(invested=bb // 2, hole=["7h", "2d"])  # weak, not in RFI
+    p1 = _P(invested=bb)
+    gs = _GS(button=0, to_act=0, bb=bb, p0=p0, p1=p1)
+    # Only call is available; to_call=0.5bb
+    acts = [LegalAction(action="check"), LegalAction(action="call", to_call=bb // 2)]
+    _patch_acts(monkeypatch, acts)
+    r = build_suggestion(gs, 0)
+    assert r["suggested"]["action"] == "call"
+    codes = {x.get("code") for x in (r.get("rationale") or [])}
+    assert "PF_LIMP_COMPLETE_BLIND" in codes
