@@ -137,7 +137,8 @@ def deal_hand_api(request):
                 "board": serializers.ListField(child=serializers.CharField(), allow_null=True),
                 "winner": serializers.IntegerField(allow_null=True),
                 "best5": serializers.ListField(
-                    child=serializers.ListField(child=serializers.CharField()), allow_null=True
+                    child=serializers.ListField(child=serializers.CharField()),
+                    allow_null=True,
                 ),
                 # 教学数据
                 "players": serializers.ListField(child=serializers.JSONField(), allow_null=True),

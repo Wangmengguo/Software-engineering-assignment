@@ -279,7 +279,12 @@ def session_start_api(request):
         METRICS["last_latency_ms"] = int(duration * 1000)
 
         return Response(
-            {"session_id": session_id, "button": s.button, "stacks": s.stacks, "config": s.config}
+            {
+                "session_id": session_id,
+                "button": s.button,
+                "stacks": s.stacks,
+                "config": s.config,
+            }
         )
 
     except Exception as e:
@@ -595,7 +600,8 @@ def session_next_api(request):
             except Exception:
                 pass
             return Response(
-                {"session_id": s.session_id, **(s.stats or {})}, status=status.HTTP_409_CONFLICT
+                {"session_id": s.session_id, **(s.stats or {})},
+                status=status.HTTP_409_CONFLICT,
             )
 
         # 1) Find latest completed hand for this session
@@ -665,7 +671,12 @@ def session_next_api(request):
             except Exception:
                 pass
             return Response({"session_id": session_id, **summary}, status=status.HTTP_409_CONFLICT)
-        HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
+        HANDS[new_hid] = {
+            "gs": gs_new,
+            "session_id": session_id,
+            "seed": seed,
+            "cfg": cfg_for_next,
+        }
 
     # outside transaction: respond success
     try:

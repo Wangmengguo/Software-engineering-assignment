@@ -121,7 +121,9 @@ class SuggestView(APIView):
             try:
                 # 常规动作计数
                 metrics.inc_action(
-                    resp.get("policy"), resp.get("suggested", {}).get("action"), street=gs.street
+                    resp.get("policy"),
+                    resp.get("suggested", {}).get("action"),
+                    street=gs.street,
                 )
                 # 若发生钳制，记录细化指标（专用计数器）
                 rationale = resp.get("rationale", []) or []
@@ -152,7 +154,8 @@ class SuggestView(APIView):
             except Exception:
                 pass
             return Response(
-                {"detail": f"suggest failed: {e}"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                {"detail": f"suggest failed: {e}"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         finally:
             try:

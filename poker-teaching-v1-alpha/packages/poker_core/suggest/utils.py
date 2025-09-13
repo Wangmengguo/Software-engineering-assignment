@@ -5,7 +5,10 @@ from hashlib import sha1
 from math import isfinite
 from typing import Any
 
+from poker_core.cards import RANK_ORDER, parse_card
 from poker_core.domain.actions import LegalAction
+
+from .preflop_tables import get_modes
 
 
 def pick_betlike_action(acts: list[LegalAction]) -> LegalAction | None:
@@ -114,6 +117,256 @@ def classify_flop(board: list[str]) -> dict[str, Any]:
         texture = "dry"
 
     return {"texture": texture, "paired": paired, "fd": fd, "sd": sd}
+
+
+# ----- PR-2: role / facing-size helpers -----
+
+
+def infer_pfr(gs) -> int | None:
+    """Return seat index (0/1) of preflop aggressor (PFR) using event stream.
+
+    Heuristic: scan events until the first board reveal (flop); track last
+    'bet'/'raise'/'allin(as=raise|bet)' during preflop. Return its 'who'.
+    Return None if not found (limped pot).
+    """
+    try:
+        evts = list(getattr(gs, "events", []) or [])
+    except Exception:
+        return None
+    pfr: int | None = None
+    for e in evts:
+        t = e.get("t")
+        if t == "board" and e.get("street") == "flop":
+            break
+        if t in {"bet", "raise"}:
+            if "who" in e:
+                pfr = int(e["who"])
+        elif t == "allin":
+            as_kind = str(e.get("as") or "").lower()
+            if as_kind in {"bet", "raise"} and "who" in e:
+                pfr = int(e["who"])
+    return pfr
+
+
+def _modes_hu() -> dict[str, Any]:
+    try:
+        modes, _ = get_modes()
+        return modes.get("HU", {}) if isinstance(modes, dict) else {}
+    except Exception:
+        return {}
+
+
+def derive_facing_size_tag(to_call: int, pot_now: int) -> str:
+    """Classify facing bet size by to_call/(pot_now) ratio.
+
+    Thresholds loaded from table modes HU:
+      - flop_facing_small_le (default 0.45) → 'third'
+      - flop_facing_mid_le   (default 0.75) → 'half'
+      - else → 'two_third+'
+    Note: pot_now excludes hero's pending call by our service convention.
+    """
+    if pot_now <= 0 or to_call <= 0:
+        return "na"
+    r = float(to_call) / float(pot_now)
+    m = _modes_hu()
+    small_le = float(m.get("flop_facing_small_le", 0.45))
+    mid_le = float(m.get("flop_facing_mid_le", 0.75))
+    if r <= small_le:
+        return "third"
+    if r <= mid_le:
+        return "half"
+    return "two_third+"
+
+
+def range_advantage(texture: str, role: str) -> bool:
+    """Very light-weight heuristic for range advantage on flop (HU).
+    - dry (A/K high, non-connected) favors PFR → True when role==pfr
+    - wet favors caller range → True when role==caller
+    - semi: neutral; give slight edge to PFR
+    """
+    t = (texture or "na").lower()
+    rl = (role or "na").lower()
+    if t == "dry":
+        return rl == "pfr"
+    if t == "wet":
+        return rl == "caller"
+    if t == "semi":
+        return rl == "pfr"
+    return False
+
+
+def nut_advantage(texture: str, role: str) -> bool:
+    """Heuristic nut advantage proxy.
+    - wet boards (paired/three-suited/connected) → caller often has more nutted combos
+    - dry/paired-high boards → PFR holds more overpairs/top range
+    """
+    t = (texture or "na").lower()
+    rl = (role or "na").lower()
+    if t == "wet":
+        return rl == "caller"
+    if t == "dry":
+        return rl == "pfr"
+    # semi: no strong nut edge assumed by default
+    return False
+
+
+# ---- Flop hand-class inference (6-bucket) ----
+
+HC_VALUE = "value_two_pair_plus"
+HC_OP_TPTK = "overpair_or_top_pair_strong"
+HC_TOP_WEAK_OR_SECOND = "top_pair_weak_or_second_pair"
+HC_MID_OR_THIRD_MINUS = "middle_pair_or_third_pair_minus"
+HC_STRONG_DRAW = "strong_draw"
+HC_WEAK_OR_AIR = "weak_draw_or_air"
+
+
+def _rank_values(cards: list[str]) -> list[int]:
+    vals: list[int] = []
+    for c in cards:
+        try:
+            r, _ = parse_card(c)
+            vals.append(RANK_ORDER.get(r, 0))
+        except Exception:
+            vals.append(0)
+    return vals
+
+
+def _suit_counts(cards: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for c in cards:
+        try:
+            _, s = parse_card(c)
+            counts[s] = counts.get(s, 0) + 1
+        except Exception:
+            pass
+    return counts
+
+
+def _has_fd(hole: list[str], board3: list[str]) -> tuple[bool, bool]:
+    """Return (fd, nfd) detection on flop.
+    - If board is two-suited and hero holds two cards of that suit → FD.
+    - If board is three-suited and hero holds one card of that suit → FD.
+    - NFD when FD and hero holds Ace of that suit.
+    """
+    if len(board3) < 3 or len(hole) < 2:
+        return (False, False)
+    bsc = _suit_counts(board3)
+    if not bsc:
+        return (False, False)
+    # target suit: suit with max count
+    suit, cnt = max(bsc.items(), key=lambda x: x[1])
+    hole_s = _suit_counts(hole).get(suit, 0)
+    fd = (cnt == 2 and hole_s == 2) or (cnt == 3 and hole_s >= 1)
+    if not fd:
+        return (False, False)
+    # NFD: hero holds Ace of the suit
+    try:
+        ranks = [parse_card(c)[0] for c in hole if parse_card(c)[1] == suit]
+        nfd = "A" in ranks
+    except Exception:
+        nfd = False
+    return (fd, nfd)
+
+
+def _has_oesd(hole: list[str], board3: list[str]) -> bool:
+    # approximate: check any 4-consecutive window having 4 distinct ranks present in union(hole,board)
+    vals = sorted(set(_rank_values(hole + board3)))
+    if len(vals) < 4:
+        return False
+    for i in range(len(vals) - 3):
+        if vals[i + 3] - vals[i] == 3:
+            # ensure at least one hole rank participates (avoid pure-board artifact)
+            hv = set(_rank_values(hole))
+            window = set(range(vals[i], vals[i] + 4))
+            if hv & window:
+                return True
+    return False
+
+
+def _has_gutshot(hole: list[str], board3: list[str]) -> bool:
+    vals = sorted(set(_rank_values(hole + board3)))
+    if len(vals) < 4:
+        return False
+    # check any 5-wide window contains at least 4 ranks
+    for i in range(len(vals)):
+        w = [v for v in vals if vals[i] <= v <= vals[i] + 4]
+        if len(w) >= 4:
+            # require at least one hole rank in window
+            hv = set(_rank_values(hole))
+            if hv & set(w):
+                return True
+    return False
+
+
+def infer_flop_hand_class(hole: list[str], board3: list[str]) -> str:
+    """Return one of 6 buckets for flop policy.
+    Precedence: two_pair+/set > overpair/TPTK(strong) > top/second > third-/under > strong_draw > weak_draw_or_air
+    """
+    try:
+        if len(hole) != 2 or len(board3) < 3:
+            return HC_WEAK_OR_AIR
+        hr1, _ = parse_card(hole[0])
+        hr2, _ = parse_card(hole[1])
+        b_ranks = [parse_card(c)[0] for c in board3[:3]]
+        # counts across 5 cards
+        counts: dict[str, int] = {}
+        for r in b_ranks + [hr1, hr2]:
+            counts[r] = counts.get(r, 0) + 1
+        pairs = [r for r, c in counts.items() if c >= 2]
+        trips = [r for r, c in counts.items() if c >= 3]
+        if trips or len(pairs) >= 2:
+            return HC_VALUE
+
+        # overpair check
+        hole_pair = hr1 == hr2
+        b_vals = sorted([RANK_ORDER[r] for r in b_ranks], reverse=True)
+        topv = b_vals[0]
+        if hole_pair and RANK_ORDER[hr1] > topv:
+            return HC_OP_TPTK
+
+        # top/second/third pair
+        # Sort board ranks by value (highest first) for accurate comparison
+        sorted_b_ranks = sorted(b_ranks, key=lambda r: RANK_ORDER[r], reverse=True)
+
+        def _kicker_val() -> int:
+            # rank value of the non-paired hole card
+            if hr1 in b_ranks and hr2 not in b_ranks:
+                return RANK_ORDER[hr2]
+            if hr2 in b_ranks and hr1 not in b_ranks:
+                return RANK_ORDER[hr1]
+            return 0
+
+        if any(r == sorted_b_ranks[0] for r in [hr1, hr2]):
+            # top pair
+            kv = _kicker_val()
+            return HC_OP_TPTK if kv >= 12 else HC_TOP_WEAK_OR_SECOND
+        if any(r == sorted_b_ranks[1] for r in [hr1, hr2]):
+            return HC_TOP_WEAK_OR_SECOND
+        if any(r == sorted_b_ranks[2] for r in [hr1, hr2]) or (
+            hole_pair and RANK_ORDER[hr1] < b_vals[2]
+        ):
+            return HC_MID_OR_THIRD_MINUS
+
+        # draws
+        fd, nfd = _has_fd(hole, board3)
+        oesd = _has_oesd(hole, board3)
+        gs = _has_gutshot(hole, board3)
+        if fd or oesd:
+            return HC_STRONG_DRAW
+        if gs:
+            return HC_WEAK_OR_AIR
+        return HC_WEAK_OR_AIR
+    except Exception:
+        return HC_WEAK_OR_AIR
+
+
+def infer_flop_hand_class_from_gs(gs, actor: int) -> str:
+    try:
+        hole = list(getattr(gs.players[actor], "hole", []) or [])
+        board = list(getattr(gs, "board", []) or [])[:3]
+        return infer_flop_hand_class(hole, board)
+    except Exception:
+        return HC_WEAK_OR_AIR
 
 
 def position_of(actor: int, table_mode: str, button: int, street: str) -> str:

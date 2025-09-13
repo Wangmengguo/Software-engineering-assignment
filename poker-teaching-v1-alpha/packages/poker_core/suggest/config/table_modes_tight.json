@@ -11,6 +11,8 @@
     "fourbet_oop_mult": 2.3,
     "cap_ratio_4b": 0.9,
     "threebet_bucket_small_le": 9,
-    "threebet_bucket_mid_le": 11
+    "threebet_bucket_mid_le": 11,
+    "flop_facing_small_le": 0.45,
+    "flop_facing_mid_le": 0.75
   }
 }

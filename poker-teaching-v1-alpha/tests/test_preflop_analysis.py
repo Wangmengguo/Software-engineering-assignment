@@ -17,11 +17,23 @@ def codes(x):
     "cards, expected_cat, why",
     [
         (["Ah", "Ad"], "premium_pair", "pair & A/A premium"),  # premium_pair 分支
-        (["Ks", "Qs"], "strong", "suited & high>=13 & low>=10"),  # strong 分支（同花大张）
+        (
+            ["Ks", "Qs"],
+            "strong",
+            "suited & high>=13 & low>=10",
+        ),  # strong 分支（同花大张）
         (["Th", "Td"], "strong", "pair & max>=10 (TT)"),  # strong 分支（对子=TT）
-        (["Jh", "Th"], "speculative", "suited & gap<=1 & high>=10"),  # speculative 分支（JT 同花）
+        (
+            ["Jh", "Th"],
+            "speculative",
+            "suited & gap<=1 & high>=10",
+        ),  # speculative 分支（JT 同花）
         (["Ah", "Td"], "broadway_offsuit", "offsuit broadway"),  # broadway_offsuit 分支
-        (["7h", "2c"], "weak_offsuit", "offsuit & high<10 & gap>=3"),  # weak_offsuit 分支
+        (
+            ["7h", "2c"],
+            "weak_offsuit",
+            "offsuit & high<10 & gap>=3",
+        ),  # weak_offsuit 分支
         (["8h", "6h"], "weak", "其余情况归入 weak"),  # else 分支
     ],
 )

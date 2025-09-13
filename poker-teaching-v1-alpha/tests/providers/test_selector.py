@@ -44,6 +44,7 @@ def test_forced_pokerkit_when_installed(monkeypatch):
 def test_forced_pokerkit_raises_when_missing(monkeypatch):
     try:
         import pokerkit  # type: ignore  # noqa: F401
+
         pytest.skip("pokerkit 已安装，跳过缺失场景测试")
     except Exception:
         pass
