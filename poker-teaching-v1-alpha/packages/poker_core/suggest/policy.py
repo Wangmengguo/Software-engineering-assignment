@@ -12,9 +12,18 @@ from typing import Any
 
 from .codes import SCodes
 from .codes import mk_rationale as R
+from .flop_rules import get_flop_rules
 from .preflop_tables import bucket_facing_size, get_modes, get_open_table, get_vs_table
 from .types import Observation, PolicyConfig
-from .utils import find_action, pick_betlike_action, to_call_from_acts
+from .utils import (
+    HC_MID_OR_THIRD_MINUS,
+    HC_OP_TPTK,
+    HC_VALUE,
+    HC_WEAK_OR_AIR,
+    find_action,
+    pick_betlike_action,
+    to_call_from_acts,
+)
 
 # 与 analysis 中口径保持一致的范围判定（避免耦合：基于 tags/hand_class）
 OPEN_RANGE_TAGS = {"pair", "suited_broadway", "Ax_suited", "broadway_offsuit"}
@@ -74,7 +83,11 @@ def policy_preflop_v0(
             ):
                 target = int(round(cfg.open_size_bb * bb))
                 amt = _clamp(target, betlike.min, betlike.max)
-                code_def = SCodes.PF_OPEN_BET if betlike.action == "bet" else SCodes.PF_OPEN_RAISE
+                code_def = (
+                    SCodes.PF_OPEN_BET
+                    if betlike.action == "bet"
+                    else SCodes.PF_OPEN_RAISE
+                )
                 rationale.append(
                     R(
                         code_def,
@@ -82,7 +95,11 @@ def policy_preflop_v0(
                         data={"bb": bb, "chosen": amt, "bb_mult": cfg.open_size_bb},
                     )
                 )
-                return ({"action": betlike.action, "amount": amt}, rationale, "preflop_v0")
+                return (
+                    {"action": betlike.action, "amount": amt},
+                    rationale,
+                    "preflop_v0",
+                )
         # 不在范围：优先过牌
         if find_action(acts, "check"):
             rationale.append(R(SCodes.PF_CHECK_NOT_IN_RANGE))
@@ -99,13 +116,19 @@ def policy_preflop_v0(
         and to_call <= threshold
     ):
         rationale.append(
-            R(SCodes.PF_CALL_THRESHOLD, data={"to_call": to_call, "threshold": threshold})
+            R(
+                SCodes.PF_CALL_THRESHOLD,
+                data={"to_call": to_call, "threshold": threshold},
+            )
         )
         return ({"action": "call"}, rationale, "preflop_v0")
 
     if find_action(acts, "fold"):
         rationale.append(
-            R(SCodes.PF_FOLD_EXPENSIVE, data={"to_call": to_call, "threshold": threshold})
+            R(
+                SCodes.PF_FOLD_EXPENSIVE,
+                data={"to_call": to_call, "threshold": threshold},
+            )
         )
         return ({"action": "fold"}, rationale, "preflop_v0")
 
@@ -157,7 +180,11 @@ def policy_postflop_v0_3(
                         data={"chosen": amt},
                     )
                 )
-                return ({"action": betlike.action, "amount": amt}, rationale, "postflop_v0_3")
+                return (
+                    {"action": betlike.action, "amount": amt},
+                    rationale,
+                    "postflop_v0_3",
+                )
         if find_action(acts, "check"):
             rationale.append(R(SCodes.PL_CHECK))
             return ({"action": "check"}, rationale, "postflop_v0_3")
@@ -203,7 +230,11 @@ def policy_postflop_v0_3(
     allin = find_action(acts, "allin")
     if allin:
         rationale.append(R(SCodes.PL_ALLIN_ONLY))
-        return ({"action": "allin", "amount": allin.max or allin.min}, rationale, "postflop_v0_3")
+        return (
+            {"action": "allin", "amount": allin.max or allin.min},
+            rationale,
+            "postflop_v0_3",
+        )
 
     if find_action(acts, "check"):
         rationale.append(R(SCodes.SAFE_CHECK))
@@ -365,14 +396,18 @@ def policy_preflop_v1(
         bkt_3b = _bucket_threebet_to(threebet_to_bb)
         node = vs_sb.get(bkt_3b, {}) or {}
         # tolerate legacy 'reraise' as alias of 'fourbet'
-        fourbet_set = set(node.get("fourbet", set()) or node.get("reraise", set()) or set())
+        fourbet_set = set(
+            node.get("fourbet", set()) or node.get("reraise", set()) or set()
+        )
         call4b_set = set(node.get("call", set()) or set())
 
         # Try 4-bet first if in range
         if combo is not None and combo in fourbet_set and find_action(acts, "raise"):
             eff_bb = _effective_stack_bb(obs)
             cap_bb_4b = int(eff_bb * max(0.0, float(cap_ratio_4b)))
-            target_to_bb = round(max(0.0, float(threebet_to_bb)) * float(fourbet_ip_mult))
+            target_to_bb = round(
+                max(0.0, float(threebet_to_bb)) * float(fourbet_ip_mult)
+            )
             fourbet_to_bb = max(0, min(cap_bb_4b, int(target_to_bb)))
             amt = int(round(fourbet_to_bb * bb))
 
@@ -519,22 +554,38 @@ def policy_preflop_v1(
             rationale.append(
                 R(
                     SCodes.PF_DEFEND_PRICE_OK,
-                    data={"pot_odds": round(pot_odds, 4), "thr": defend_thr, "bucket": bucket},
+                    data={
+                        "pot_odds": round(pot_odds, 4),
+                        "thr": defend_thr,
+                        "bucket": bucket,
+                    },
                 )
             )
             # Only include bucket meta when facing a raise (to_call > 0), not in limped pots
-            meta = {"bucket": bucket, "pot_odds": round(pot_odds, 4)} if to_call > 0 else {}
+            meta = (
+                {"bucket": bucket, "pot_odds": round(pot_odds, 4)}
+                if to_call > 0
+                else {}
+            )
             return {"action": "call"}, rationale, "preflop_v1", meta
         else:
             rationale.append(
                 R(
                     SCodes.PF_DEFEND_PRICE_BAD,
-                    data={"pot_odds": round(pot_odds, 4), "thr": defend_thr, "bucket": bucket},
+                    data={
+                        "pot_odds": round(pot_odds, 4),
+                        "thr": defend_thr,
+                        "bucket": bucket,
+                    },
                 )
             )
             # price bad: consider fold if available
             # Only include bucket meta when facing a raise (to_call > 0), not in limped pots
-            meta = {"bucket": bucket, "pot_odds": round(pot_odds, 4)} if to_call > 0 else {}
+            meta = (
+                {"bucket": bucket, "pot_odds": round(pot_odds, 4)}
+                if to_call > 0
+                else {}
+            )
             if find_action(acts, "fold"):
                 return {"action": "fold"}, rationale, "preflop_v1", meta
             if find_action(acts, "check"):
@@ -569,3 +620,161 @@ def policy_preflop_v1(
 
 
 __all__.append("policy_preflop_v1")
+
+
+# --------- Flop v1 (HU, single-raised only; role+MDF aligned) ---------
+
+
+def _match_rule(node: dict[str, Any], keys: list[str]) -> dict[str, Any] | None:
+    """Depth-first lookup with 'defaults' fallback at each level.
+    keys: [pot_type, 'role', role, 'ip'|'oop', texture, spr_bucket, hand_class]
+    Returns a dict leaf like {action:'bet', size_tag:'third'} or None.
+    """
+    cur: Any = node
+    try:
+        for k in keys:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            elif isinstance(cur, dict) and "defaults" in cur:
+                cur = cur["defaults"]
+            else:
+                return None
+        if isinstance(cur, dict) and ("action" in cur or "size_tag" in cur):
+            return cur
+    except Exception:
+        return None
+    return None
+
+
+def policy_flop_v1(
+    obs: Observation, cfg: PolicyConfig
+) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict[str, Any]]:
+    acts = list(obs.acts or [])
+    if not acts:
+        raise ValueError("No legal actions")
+
+    rationale: list[dict[str, Any]] = []
+
+    # Load rules (strategy-aware)
+    rules, ver = get_flop_rules()
+
+    # Pot type: v1.0 supports only single_raised; treat others as fallback
+    pot_type = "single_raised"
+    if pot_type not in (rules or {}):
+        rationale.append(R(SCodes.CFG_FALLBACK_USED))
+
+    # Derived inputs
+    ip_key = "ip" if bool(obs.ip) else "oop"
+    texture = obs.board_texture or "na"
+    spr = obs.spr_bucket or "na"
+    role = obs.role or "na"
+
+    # Facing a bet?
+    to_call = int(obs.to_call or 0)
+    pot_now = int(obs.pot_now or 0)
+    denom = pot_now + max(0, to_call)
+    pot_odds = (to_call / denom) if denom > 0 else 1.0
+    mdf = 1.0 - pot_odds
+
+    # Meta to return (teaching fields)
+    meta: dict[str, Any] = {
+        "size_tag": None,
+        "role": role,
+        "texture": texture,
+        "spr_bucket": spr,
+        "mdf": round(mdf, 4),
+        "pot_odds": round(pot_odds, 4),
+        "facing_size_tag": getattr(obs, "facing_size_tag", "na"),
+        "range_adv": bool(getattr(obs, "range_adv", False)),
+        "nut_adv": bool(getattr(obs, "nut_adv", False)),
+        "rules_ver": ver,
+    }
+
+    # 1) No bet yet: prefer c-bet on dry boards when PFR
+    if to_call == 0:
+        node = _match_rule(
+            rules,
+            [
+                pot_type,
+                "role",
+                role,
+                ip_key,
+                texture,
+                spr,
+                str(obs.hand_class or "unknown"),
+            ],
+        ) or _match_rule(rules, [pot_type, "role", role, ip_key, texture])
+
+        if node:
+            action = str(node.get("action") or "bet")
+            size_tag = str(node.get("size_tag") or "third")
+            meta["size_tag"] = size_tag
+            plan_str = node.get("plan")
+            if isinstance(plan_str, str) and plan_str:
+                meta["plan"] = plan_str
+            if action in {"bet", "raise"}:
+                # amount will be filled by service via size_tag if omitted
+                suggested = {"action": action}
+                # rationale by role/advantage
+                if bool(meta["range_adv"]) and size_tag == "third":
+                    rationale.append(R(SCodes.FL_RANGE_ADV_SMALL_BET))
+                elif bool(meta["nut_adv"]) and size_tag in {"two_third", "pot"}:
+                    rationale.append(R(SCodes.FL_NUT_ADV_POLAR))
+                else:
+                    rationale.append(R(SCodes.FL_DRY_CBET_THIRD))
+                # SPR notes
+                if (
+                    obs.spr_bucket == "le3"
+                    and size_tag in {"two_third", "pot"}
+                    and (obs.hand_class in {HC_VALUE, HC_OP_TPTK})
+                ):
+                    rationale.append(R(SCodes.FL_LOW_SPR_VALUE_UP))
+                if (
+                    obs.spr_bucket == "ge6"
+                    and action == "check"
+                    and (obs.hand_class in {HC_MID_OR_THIRD_MINUS, HC_WEAK_OR_AIR})
+                ):
+                    rationale.append(R(SCodes.FL_HIGH_SPR_CTRL))
+                return suggested, rationale, "flop_v1", meta
+            if action == "check" and find_action(acts, "check"):
+                rationale.append(R(SCodes.FL_DELAYED_CBET_PLAN))
+                return {"action": "check"}, rationale, "flop_v1", meta
+
+        # Fallback defaults by texture
+        if role == "pfr" and texture == "dry" and pick_betlike_action(acts):
+            meta["size_tag"] = "third"
+            rationale.append(R(SCodes.FL_RANGE_ADV_SMALL_BET))
+            return {"action": "bet"}, rationale, "flop_v1", meta
+        if find_action(acts, "check"):
+            rationale.append(R(SCodes.FL_CHECK_RANGE))
+            return {"action": "check"}, rationale, "flop_v1", meta
+
+    # 2) Facing a bet: show MDF/pot_odds in rationale and choose simple line
+    # Teaching-first, no mixing: defend versus small sizes; tighten vs large
+    fst = getattr(obs, "facing_size_tag", "na")
+    rationale.append(
+        R(
+            SCodes.FL_MDF_DEFEND,
+            data={"mdf": meta["mdf"], "pot_odds": meta["pot_odds"], "facing": fst},
+        )
+    )
+    if fst in {"third", "half"} and find_action(acts, "call"):
+        return {"action": "call"}, rationale, "flop_v1", meta
+    # vs large sizes: if we have any raise path and nut_adv, allow raise stub (service will clamp)
+    if fst == "two_third+" and bool(meta["nut_adv"]) and find_action(acts, "raise"):
+        meta["size_tag"] = "two_third"
+        meta.setdefault("plan", "vs small/half → call; vs two_third+ → raise")
+        rationale.append(R(SCodes.FL_RAISE_SEMI_BLUFF))
+        return {"action": "raise"}, rationale, "flop_v1", meta
+    if find_action(acts, "call"):
+        return {"action": "call"}, rationale, "flop_v1", meta
+    if find_action(acts, "fold"):
+        return {"action": "fold"}, rationale, "flop_v1", meta
+
+    # Last resort
+    if find_action(acts, "check"):
+        return {"action": "check"}, rationale, "flop_v1", meta
+    raise ValueError("No safe flop v1 suggestion")
+
+
+__all__.append("policy_flop_v1")

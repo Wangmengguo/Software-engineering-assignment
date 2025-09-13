@@ -27,6 +27,11 @@ class Observation:
     pot_now: int = 0
     # PR-1: 169 栅格组合标签（如 'AKs','KQo','TT'；未知为空串）
     combo: str = ""
+    # PR-2 (Flop v1): role/MDF helpers and facing size tag
+    role: str = "na"  # pfr | caller | na
+    range_adv: bool = False  # heuristic range advantage on flop
+    nut_adv: bool = False  # heuristic nut advantage on flop
+    facing_size_tag: str = "na"  # third | half | two_third+ | na
 
 
 @dataclass(frozen=True)
