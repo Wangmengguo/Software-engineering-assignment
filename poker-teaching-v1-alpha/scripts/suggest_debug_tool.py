@@ -20,7 +20,11 @@ def _ensure_path():
 
 _ensure_path()
 
-from poker_core.state_hu import start_hand, start_session, apply_action  # type: ignore  # noqa: E402
+from poker_core.state_hu import (  # type: ignore  # noqa: E402
+    apply_action,
+    start_hand,
+    start_session,
+)
 from poker_core.suggest.service import build_suggestion  # type: ignore  # noqa: E402
 from poker_core.suggest.utils import stable_roll  # type: ignore  # noqa: E402
 
@@ -138,9 +142,7 @@ def main() -> int:
     ap_common.add_argument(
         "--pct", type=int, default=0, help="v1 rollout percent when policy=auto (0-100)"
     )
-    ap_common.add_argument(
-        "--table-mode", default="HU", help="HU|4max|6max (default: HU)"
-    )
+    ap_common.add_argument("--table-mode", default="HU", help="HU|4max|6max (default: HU)")
     ap_common.add_argument(
         "--strategy", default="medium", help="loose|medium|tight (default: medium)"
     )
@@ -151,9 +153,7 @@ def main() -> int:
         help="1 to include debug.meta in response (default: 1)",
     )
 
-    sp1 = sub.add_parser(
-        "single", parents=[ap_common], help="Produce a single suggestion JSON"
-    )
+    sp1 = sub.add_parser("single", parents=[ap_common], help="Produce a single suggestion JSON")
     sp1.add_argument("--session-id", default="s_cli", help="Session id tag")
     sp1.add_argument("--hand-id", default=None, help="Override hand id")
     sp1.add_argument("--seed", type=int, default=42, help="Shuffle seed (default: 42)")
@@ -190,9 +190,7 @@ def main() -> int:
     sp2 = sub.add_parser(
         "dist", parents=[ap_common], help="Check rollout distribution via stable hash"
     )
-    sp2.add_argument(
-        "--count", type=int, default=2000, help="Number of samples (default: 2000)"
-    )
+    sp2.add_argument("--count", type=int, default=2000, help="Number of samples (default: 2000)")
     sp2.add_argument("--show-sample", type=int, default=0, help="Show first K samples")
     sp2.set_defaults(func=cmd_dist)
 

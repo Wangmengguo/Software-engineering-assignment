@@ -46,7 +46,10 @@ def test_sb_rfi_hit(monkeypatch):
     p0 = _P(invested=bb // 2, hole=["Ah", "Qd"])  # AQo
     p1 = _P(invested=bb, hole=["7c", "7d"])  # irrelevant
     gs = _GS(button=0, to_act=0, bb=bb, p0=p0, p1=p1)
-    acts = [LegalAction(action="check"), LegalAction(action="bet", min=bb, max=100 * bb)]
+    acts = [
+        LegalAction(action="check"),
+        LegalAction(action="bet", min=bb, max=100 * bb),
+    ]
     _patch_acts(monkeypatch, acts)
     r = build_suggestion(gs, 0)
     assert r["suggested"]["action"] in {"bet", "raise"}
@@ -203,7 +206,13 @@ def test_pot_odds_equal_threshold_is_ok(monkeypatch):
 
     def _fake_modes(_rel):
         return (
-            {"HU": {"open_bb": 2.5, "defend_threshold_ip": 0.25, "defend_threshold_oop": 0.25}},
+            {
+                "HU": {
+                    "open_bb": 2.5,
+                    "defend_threshold_ip": 0.25,
+                    "defend_threshold_oop": 0.25,
+                }
+            },
             1,
         )
 

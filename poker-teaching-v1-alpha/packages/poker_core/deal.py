@@ -9,7 +9,13 @@ def deal_hand(seed: int | None = None, num_players: int = 2):
     deck = make_deck()
     rnd.shuffle(deck)
 
-    steps = [{"idx": 0, "evt": "DECK_INIT", "payload": {"algo": rng.algo, "cards": len(deck)}}]
+    steps = [
+        {
+            "idx": 0,
+            "evt": "DECK_INIT",
+            "payload": {"algo": rng.algo, "cards": len(deck)},
+        }
+    ]
     players = []
     for p in range(num_players):
         hole = [deck.pop(), deck.pop()]

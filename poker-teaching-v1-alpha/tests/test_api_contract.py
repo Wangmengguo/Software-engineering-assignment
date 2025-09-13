@@ -15,7 +15,14 @@ def test_deal_then_replay_basic():
     )
     assert r.status_code == 200
     body = r.json()
-    for key in ["hand_id", "seed", "engine_commit", "schema_version", "players", "annotations"]:
+    for key in [
+        "hand_id",
+        "seed",
+        "engine_commit",
+        "schema_version",
+        "players",
+        "annotations",
+    ]:
         assert key in body and body[key] is not None
     assert re.match(r"^h_[0-9a-f]{8}$", body["hand_id"])
     assert isinstance(body["players"], list)

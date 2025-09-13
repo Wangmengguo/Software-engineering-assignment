@@ -12,7 +12,9 @@ def test_minimal_flow():
     sid = r.json()["session_id"]
 
     r = c.post(
-        "/api/v1/hand/start", data=json.dumps({"session_id": sid}), content_type="application/json"
+        "/api/v1/hand/start",
+        data=json.dumps({"session_id": sid}),
+        content_type="application/json",
     )
     assert r.status_code == 200
     hid = r.json()["hand_id"]
@@ -25,7 +27,9 @@ def test_minimal_flow():
     # 走一个动作（按返回的 legal_actions 选一个）
     act = body["legal_actions"][0] if body["legal_actions"] else "check"
     r = c.post(
-        f"/api/v1/hand/act/{hid}", data=json.dumps({"action": act}), content_type="application/json"
+        f"/api/v1/hand/act/{hid}",
+        data=json.dumps({"action": act}),
+        content_type="application/json",
     )
     assert r.status_code == 200
     assert "state" in r.json()
@@ -125,7 +129,10 @@ def test_replay_has_winner_and_best5(client):
 
     # 8) 验证winner格式 (应该是0, 1, 或None for tie)
     winner = replay_data["winner"]
-    assert winner is None or winner in [0, 1], f"Winner should be None, 0, or 1, got {winner}"
+    assert winner is None or winner in [
+        0,
+        1,
+    ], f"Winner should be None, 0, or 1, got {winner}"
 
     # 9) 验证best5格式
     best5 = replay_data["best5"]

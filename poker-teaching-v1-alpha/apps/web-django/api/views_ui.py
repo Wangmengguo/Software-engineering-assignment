@@ -233,7 +233,9 @@ def _render_oob_fragments(
         )
         parts.append(
             render_to_string(
-                "ui/_amount.html", {"amount": actions.get("amount", {})}, request=request
+                "ui/_amount.html",
+                {"amount": actions.get("amount", {})},
+                request=request,
             )
         )
 
@@ -269,7 +271,10 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
         st = snapshot_state(gs)
         log = _log_items(gs)
         if _is_hand_over(gs):
-            actions = {"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}}
+            actions = {
+                "items": [],
+                "amount": {"show": False, "min": 1, "max": 0, "step": 1},
+            }
         else:
             actions = _actions_model(gs)
     # SSR: if session already ended, prepare session-end view data
@@ -277,7 +282,10 @@ def ui_game_view(request: HttpRequest, session_id: str, hand_id: str) -> HttpRes
     ended_summary = dict(s.stats or {}) if session_ended else None
     ended_reason_text = None
     if session_ended:
-        m = {"bust": "Insufficient chips to post blinds", "max_hands": "Maximum hands reached"}
+        m = {
+            "bust": "Insufficient chips to post blinds",
+            "max_hands": "Maximum hands reached",
+        }
         ended_reason_text = m.get(s.ended_reason or "", s.ended_reason or "Ended")
     # last hand id for replay link (best-effort)
     last_hid = None
@@ -332,7 +340,10 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
                 request,
                 session=s,
                 st=st,
-                actions={"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}},
+                actions={
+                    "items": [],
+                    "amount": {"show": False, "min": 1, "max": 0, "step": 1},
+                },
                 error_text="Hand already ended",
                 show_next_controls=True,
                 replay_url=f"/api/v1/ui/replay/{hand_id}",
@@ -381,7 +392,10 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
             from .views_play import _persist_replay
 
             _persist_replay(hand_id, gs)
-            actions = {"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}}
+            actions = {
+                "items": [],
+                "amount": {"show": False, "min": 1, "max": 0, "step": 1},
+            }
         else:
             actions = _actions_model(gs)
 
@@ -433,7 +447,9 @@ def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
                 rev = bool(teach)
             parts.append(
                 render_to_string(
-                    "ui/_seats.html", {"st": st, "teach": teach, "reveal_opp": rev}, request=request
+                    "ui/_seats.html",
+                    {"st": st, "teach": teach, "reveal_opp": rev},
+                    request=request,
                 )
             )
         parts.append(
@@ -586,7 +602,12 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
             except Exception:
                 pass
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
-        HANDS[new_hid] = {"gs": gs_new, "session_id": session_id, "seed": seed, "cfg": cfg_for_next}
+        HANDS[new_hid] = {
+            "gs": gs_new,
+            "session_id": session_id,
+            "seed": seed,
+            "cfg": cfg_for_next,
+        }
 
         # 片段渲染
         st = snapshot_state(gs_new)
@@ -645,7 +666,10 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 request,
                 session=s,
                 st=st,
-                actions={"items": [], "amount": {"show": False, "min": 1, "max": 0, "step": 1}},
+                actions={
+                    "items": [],
+                    "amount": {"show": False, "min": 1, "max": 0, "step": 1},
+                },
                 error_text="Hand already ended",
                 show_next_controls=True,  # 添加这个参数，让UI显示next hands和replay按钮
                 replay_url=f"/api/v1/ui/replay/{hand_id}",  # 添加replay URL
@@ -664,7 +688,11 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
         if actor not in (0, 1):
             status_label = "422"
             html = _render_oob_fragments(
-                request, session=s, st=st, actions=actions, error_text="Invalid suggest parameters"
+                request,
+                session=s,
+                st=st,
+                actions=actions,
+                error_text="Invalid suggest parameters",
             )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
 
@@ -705,7 +733,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
             rationale = resp.get("rationale", []) or []
             if any((r or {}).get("code") == "W_CLAMPED" for r in rationale):
                 coach_html += "\n" + render_to_string(
-                    "ui/_status_chip.html", {"text": "Clamped", "extra_class": ""}, request=request
+                    "ui/_status_chip.html",
+                    {"text": "Clamped", "extra_class": ""},
+                    request=request,
                 )
 
             html = _render_oob_fragments(
@@ -721,7 +751,11 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
         except ValueError:
             status_label = "422"
             html = _render_oob_fragments(
-                request, session=s, st=st, actions=actions, error_text="Suggestion unavailable"
+                request,
+                session=s,
+                st=st,
+                actions=actions,
+                error_text="Suggestion unavailable",
             )
             return _oob_response(html, route=t0_route, method=method, status_label=status_label)
     finally:
@@ -798,9 +832,18 @@ def ui_start(request: HttpRequest) -> HttpResponse:
         # Start first hand
         hand_id = str(uuid.uuid4())
         gs = _start_hand(
-            s.config, session_id=session_id, hand_id=hand_id, button=int(s.button), seed=None
+            s.config,
+            session_id=session_id,
+            hand_id=hand_id,
+            button=int(s.button),
+            seed=None,
         )
-        HANDS[hand_id] = {"gs": gs, "session_id": session_id, "seed": None, "cfg": s.config}
+        HANDS[hand_id] = {
+            "gs": gs,
+            "session_id": session_id,
+            "seed": None,
+            "cfg": s.config,
+        }
 
         resp = HttpResponse("", status=200)
         resp["HX-Redirect"] = f"/api/v1/ui/game/{session_id}/{hand_id}"

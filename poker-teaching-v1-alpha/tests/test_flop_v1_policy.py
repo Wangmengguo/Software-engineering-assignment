@@ -1,11 +1,7 @@
-import os
-
-import pytest
-
-from packages.poker_core.suggest.policy import policy_flop_v1
-from packages.poker_core.suggest.types import Observation, PolicyConfig
 from packages.poker_core.domain.actions import LegalAction
 from packages.poker_core.suggest.flop_rules import get_flop_rules
+from packages.poker_core.suggest.policy import policy_flop_v1
+from packages.poker_core.suggest.types import Observation, PolicyConfig
 from packages.poker_core.suggest.utils import derive_facing_size_tag
 
 
@@ -49,8 +45,7 @@ def _obs(
         combo="",
         role=role,
         range_adv=(texture == "dry" and role == "pfr"),
-        nut_adv=(texture == "wet" and role == "caller")
-        or (texture == "dry" and role == "pfr"),
+        nut_adv=(texture == "wet" and role == "caller") or (texture == "dry" and role == "pfr"),
         facing_size_tag=facing_size_tag,
     )
 
@@ -137,9 +132,7 @@ def test_pfr_oop_dry_overpair_bet_third():
 
 
 def test_pfr_ip_dry_air_check():
-    ob = _obs(
-        ip=True, role="pfr", texture="dry", spr="3to6", hand_class="weak_draw_or_air"
-    )
+    ob = _obs(ip=True, role="pfr", texture="dry", spr="3to6", hand_class="weak_draw_or_air")
     suggested, rationale, name, meta = _call_policy(ob)
     assert suggested["action"] in ("check", "bet")
     if suggested["action"] == "check":
@@ -167,9 +160,7 @@ def test_pfr_oop_semi_middle_pair_check():
 
 
 def test_pfr_ip_wet_value_bet_twothird():
-    ob = _obs(
-        ip=True, role="pfr", texture="wet", spr="3to6", hand_class="value_two_pair_plus"
-    )
+    ob = _obs(ip=True, role="pfr", texture="wet", spr="3to6", hand_class="value_two_pair_plus")
     suggested, rationale, name, meta = _call_policy(ob)
     assert suggested["action"] == "bet"
     assert meta["size_tag"] in ("two_third", "pot")
@@ -296,9 +287,7 @@ def test_caller_oop_semi_value_probe_half():
 
 
 def test_caller_ip_dry_strong_draw_small_or_half():
-    ob = _obs(
-        ip=True, role="caller", texture="dry", spr="3to6", hand_class="strong_draw"
-    )
+    ob = _obs(ip=True, role="caller", texture="dry", spr="3to6", hand_class="strong_draw")
     suggested, rationale, name, meta = _call_policy(ob)
     if suggested["action"] == "bet":
         assert meta["size_tag"] in ("third", "half")
@@ -346,9 +335,7 @@ def test_caller_ip_wet_value_bet_two_third():
 
 
 def test_wet_le3_value_is_pot():
-    ob = _obs(
-        ip=True, role="pfr", texture="wet", spr="le3", hand_class="value_two_pair_plus"
-    )
+    ob = _obs(ip=True, role="pfr", texture="wet", spr="le3", hand_class="value_two_pair_plus")
     suggested, rationale, name, meta = _call_policy(ob)
     if suggested["action"] == "bet":
         assert meta["size_tag"] == "pot"
@@ -363,9 +350,7 @@ def test_semi_le3_strong_draw_oop_bet_half_pfr():
 
 
 def test_semi_le3_strong_draw_oop_bet_half_caller():
-    ob = _obs(
-        ip=False, role="caller", texture="semi", spr="le3", hand_class="strong_draw"
-    )
+    ob = _obs(ip=False, role="caller", texture="semi", spr="le3", hand_class="strong_draw")
     suggested, rationale, name, meta = _call_policy(ob)
     if suggested["action"] == "bet":
         assert meta["size_tag"] == "half"
@@ -373,9 +358,7 @@ def test_semi_le3_strong_draw_oop_bet_half_caller():
 
 
 def test_caller_ip_dry_air_has_plan():
-    ob = _obs(
-        ip=True, role="caller", texture="dry", spr="3to6", hand_class="weak_draw_or_air"
-    )
+    ob = _obs(ip=True, role="caller", texture="dry", spr="3to6", hand_class="weak_draw_or_air")
     suggested, rationale, name, meta = _call_policy(ob)
     assert suggested["action"] == "check"
     assert isinstance(meta.get("plan"), str) and "stab turns" in meta["plan"]

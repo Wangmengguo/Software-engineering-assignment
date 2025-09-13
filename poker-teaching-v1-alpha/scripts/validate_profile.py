@@ -59,10 +59,14 @@ def validate_profile_dir(root: Path) -> dict[str, Any]:
             hu = modes.get("HU", {}) if isinstance(modes, dict) else {}
             _require("open_bb" in hu, errors, f"{strategy}: HU.open_bb missing")
             _require(
-                "defend_threshold_ip" in hu, errors, f"{strategy}: HU.defend_threshold_ip missing"
+                "defend_threshold_ip" in hu,
+                errors,
+                f"{strategy}: HU.defend_threshold_ip missing",
             )
             _require(
-                "defend_threshold_oop" in hu, errors, f"{strategy}: HU.defend_threshold_oop missing"
+                "defend_threshold_oop" in hu,
+                errors,
+                f"{strategy}: HU.defend_threshold_oop missing",
             )
 
         if s_open == "ok":
@@ -98,7 +102,8 @@ def validate_profile_dir(root: Path) -> dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate SUGGEST_CONFIG_DIR profile structure")
     ap.add_argument(
-        "path", help="Path to config dir (contains table_modes_*.json and ranges/preflop_*_*.json)"
+        "path",
+        help="Path to config dir (contains table_modes_*.json and ranges/preflop_*_*.json)",
     )
     args = ap.parse_args()
     root = Path(args.path).expanduser().resolve()

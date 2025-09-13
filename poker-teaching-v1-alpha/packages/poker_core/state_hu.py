@@ -68,7 +68,11 @@ def start_session(init_stack: int = 200, sb: int = SB, bb: int = BB) -> dict:
 
 
 def start_hand(
-    session_cfg: dict, session_id: str, hand_id: str, button: int, seed: int | None = None
+    session_cfg: dict,
+    session_id: str,
+    hand_id: str,
+    button: int,
+    seed: int | None = None,
 ) -> GameState:
     """
     按 HU 规则：
@@ -456,7 +460,11 @@ def apply_action(gs: GameState, action: str, amount: int | None = None) -> GameS
                 gs = _update_player(gs, actor, me)
                 gs.events.append({"t": "allin", "who": actor, "amt": push, "as": "raise"})
                 if actual_add >= min_inc:
-                    gs = replace(gs, last_bet=gs.last_bet + actual_add, last_raise_size=actual_add)
+                    gs = replace(
+                        gs,
+                        last_bet=gs.last_bet + actual_add,
+                        last_raise_size=actual_add,
+                    )
                 gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
                 return gs
             # 其他 to_call==0 且已开火的情形：不可 all-in 加注（HU 对手必须能响应）。视为非法
@@ -475,11 +483,19 @@ def apply_action(gs: GameState, action: str, amount: int | None = None) -> GameS
                 over = to_call - pay
                 opp = gs.players[1 - actor]
                 opp = _replace_player(
-                    opp, invested_street=opp.invested_street - over, stack=opp.stack + over
+                    opp,
+                    invested_street=opp.invested_street - over,
+                    stack=opp.stack + over,
                 )
                 gs = _update_player(gs, 1 - actor, opp)
                 gs.events.append(
-                    {"t": "allin", "who": actor, "amt": push, "as": "call_short", "refund": over}
+                    {
+                        "t": "allin",
+                        "who": actor,
+                        "amt": push,
+                        "as": "call_short",
+                        "refund": over,
+                    }
                 )
                 gs = replace(gs, to_act=1 - actor, open_bet=True, checks_in_round=0)
                 return _maybe_advance_street(gs)
@@ -549,7 +565,13 @@ def settle_if_needed(gs: GameState) -> GameState:
 
     winner, tie, best5 = _showdown_eval(gs)
     gs.events.append(
-        {"t": "showdown", "winner": winner, "is_tie": tie, "best5": best5, "board": list(gs.board)}
+        {
+            "t": "showdown",
+            "winner": winner,
+            "is_tie": tie,
+            "best5": best5,
+            "board": list(gs.board),
+        }
     )
 
     if tie:
