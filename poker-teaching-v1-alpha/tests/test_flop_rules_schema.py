@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from packages.poker_core.suggest.flop_rules import load_flop_rules
+from poker_core.suggest.flop_rules import load_flop_rules
 
 
 def _validate_rules(data: dict[str, Any]) -> list[str]:
@@ -44,8 +44,7 @@ def test_flop_rules_medium_schema_gate():
     errs = _validate_rules(data)
     if errs:
         raise AssertionError(
-            "medium rules schema invalid:\n"
-            + json.dumps(errs, ensure_ascii=False, indent=2)
+            "medium rules schema invalid:\n" + json.dumps(errs, ensure_ascii=False, indent=2)
         )
 
 

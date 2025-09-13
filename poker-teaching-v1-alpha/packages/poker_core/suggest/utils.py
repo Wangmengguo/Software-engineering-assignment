@@ -325,6 +325,9 @@ def infer_flop_hand_class(hole: list[str], board3: list[str]) -> str:
             return HC_OP_TPTK
 
         # top/second/third pair
+        # Sort board ranks by value (highest first) for accurate comparison
+        sorted_b_ranks = sorted(b_ranks, key=lambda r: RANK_ORDER[r], reverse=True)
+
         def _kicker_val() -> int:
             # rank value of the non-paired hole card
             if hr1 in b_ranks and hr2 not in b_ranks:
@@ -333,13 +336,13 @@ def infer_flop_hand_class(hole: list[str], board3: list[str]) -> str:
                 return RANK_ORDER[hr1]
             return 0
 
-        if any(r == b_ranks[0] for r in [hr1, hr2]):
+        if any(r == sorted_b_ranks[0] for r in [hr1, hr2]):
             # top pair
             kv = _kicker_val()
             return HC_OP_TPTK if kv >= 12 else HC_TOP_WEAK_OR_SECOND
-        if any(r == b_ranks[1] for r in [hr1, hr2]):
+        if any(r == sorted_b_ranks[1] for r in [hr1, hr2]):
             return HC_TOP_WEAK_OR_SECOND
-        if any(r == b_ranks[2] for r in [hr1, hr2]) or (
+        if any(r == sorted_b_ranks[2] for r in [hr1, hr2]) or (
             hole_pair and RANK_ORDER[hr1] < b_vals[2]
         ):
             return HC_MID_OR_THIRD_MINUS

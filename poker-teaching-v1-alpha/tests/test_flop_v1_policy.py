@@ -1,8 +1,8 @@
-from packages.poker_core.domain.actions import LegalAction
-from packages.poker_core.suggest.flop_rules import get_flop_rules
-from packages.poker_core.suggest.policy import policy_flop_v1
-from packages.poker_core.suggest.types import Observation, PolicyConfig
-from packages.poker_core.suggest.utils import derive_facing_size_tag
+from poker_core.domain.actions import LegalAction
+from poker_core.suggest.flop_rules import get_flop_rules
+from poker_core.suggest.policy import policy_flop_v1
+from poker_core.suggest.types import Observation, PolicyConfig
+from poker_core.suggest.utils import derive_facing_size_tag
 
 
 def _obs(
