@@ -81,7 +81,9 @@ def _hud_model(s: Session, st: dict[str, Any]) -> dict[str, Any]:
 
 def _is_hand_over(gs) -> bool:
     street = getattr(gs, "street", None)
-    return street in {"complete", "showdown_complete"} or bool(getattr(gs, "is_over", False))
+    return street in {"complete", "showdown_complete"} or bool(
+        getattr(gs, "is_over", False)
+    )
 
 
 def _ended_by_showdown(gs) -> bool:
@@ -134,16 +136,22 @@ def _log_items(gs) -> list[str]:
             items.append(f"{role} Check")
         elif t == "call":
             amt = e.get("amt")
-            items.append(f"{role} Call {int(amt)}" if amt is not None else f"{role} Call")
+            items.append(
+                f"{role} Call {int(amt)}" if amt is not None else f"{role} Call"
+            )
         elif t == "bet":
             amt = e.get("amt")
             items.append(f"{role} Bet {int(amt)}" if amt is not None else f"{role} Bet")
         elif t == "raise":
             to = e.get("to")
-            items.append(f"{role} Raise to {int(to)}" if to is not None else f"{role} Raise")
+            items.append(
+                f"{role} Raise to {int(to)}" if to is not None else f"{role} Raise"
+            )
         elif t == "allin":
             amt = e.get("amt")
-            items.append(f"{role} All-in {int(amt)}" if amt is not None else f"{role} All-in")
+            items.append(
+                f"{role} All-in {int(amt)}" if amt is not None else f"{role} All-in"
+            )
         elif t == "fold":
             items.append(f"{role} Fold")
         elif t == "showdown":
@@ -177,11 +185,15 @@ def _render_oob_fragments(
     parts: list[str] = []
 
     # Unified error banner
-    parts.append(render_to_string("ui/_error.html", {"text": error_text or ""}, request=request))
+    parts.append(
+        render_to_string("ui/_error.html", {"text": error_text or ""}, request=request)
+    )
 
     # HUD (aria-live for next actor)
     parts.append(
-        render_to_string("ui/_hud.html", {"hud": _hud_model(session, st)}, request=request)
+        render_to_string(
+            "ui/_hud.html", {"hud": _hud_model(session, st)}, request=request
+        )
     )
 
     # Board + pot
@@ -246,12 +258,16 @@ def _render_oob_fragments(
     # Coach trigger (update hx-post hand_id when new hand is created)
     if coach_hand_id:
         parts.append(
-            render_to_string("ui/_coach_trigger.html", {"hand_id": coach_hand_id}, request=request)
+            render_to_string(
+                "ui/_coach_trigger.html", {"hand_id": coach_hand_id}, request=request
+            )
         )
 
     # Action log (last 5)
     if log_items is not None:
-        parts.append(render_to_string("ui/_log.html", {"log": log_items}, request=request))
+        parts.append(
+            render_to_string("ui/_log.html", {"log": log_items}, request=request)
+        )
 
     return "\n".join(parts)
 
@@ -328,7 +344,9 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
         if not entry or entry.get("gs") is None:
             status_label = "404"
             html = _render_error_only(request, "Object not found or expired")
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         gs = entry["gs"]
         s = get_object_or_404(Session, session_id=entry.get("session_id"))
@@ -348,10 +366,14 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
                 show_next_controls=True,
                 replay_url=f"/api/v1/ui/replay/{hand_id}",
                 log_items=_log_items(gs),
-                reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
+                reveal_opp=bool(
+                    request.session.get("teach", True) or _ended_by_showdown(gs)
+                ),
             )
             status_label = "409"
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         action = request.POST.get("action") or request.GET.get("action")
         amount_raw = request.POST.get("amount") or request.GET.get("amount")
@@ -359,8 +381,12 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
 
         if action is None:
             status_label = "422"
-            html = _render_error_only(request, "Invalid action or amount (missing action)")
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            html = _render_error_only(
+                request, "Invalid action or amount (missing action)"
+            )
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         try:
             gs = _apply_action(gs, action, amount)
@@ -377,9 +403,13 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
                 actions=actions,
                 error_text="Invalid action or amount (adjusted or please retry)",
                 log_items=_log_items(gs),
-                reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
+                reveal_opp=bool(
+                    request.session.get("teach", True) or _ended_by_showdown(gs)
+                ),
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         gs = _settle_if_needed(gs)
         entry["gs"] = gs
@@ -407,9 +437,13 @@ def ui_hand_act(request: HttpRequest, hand_id: str) -> HttpResponse:
             show_next_controls=hand_over,
             replay_url=f"/api/v1/ui/replay/{hand_id}" if hand_over else None,
             log_items=_log_items(gs),
-            reveal_opp=bool(request.session.get("teach", True) or _ended_by_showdown(gs)),
+            reveal_opp=bool(
+                request.session.get("teach", True) or _ended_by_showdown(gs)
+            ),
         )
-        return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+        return _oob_response(
+            html, route=t0_route, method=method, status_label=status_label
+        )
     finally:
         pass
 
@@ -431,7 +465,9 @@ def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
         request.session["teach"] = teach
 
         hand_id = request.POST.get("hand_id") or request.GET.get("hand_id")
-        session_id = request.POST.get("session_id") or request.GET.get("session_id") or ""
+        session_id = (
+            request.POST.get("session_id") or request.GET.get("session_id") or ""
+        )
         st: dict[str, Any] = {}
         if hand_id:
             entry = HANDS.get(hand_id)
@@ -442,7 +478,11 @@ def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
         if st:
             try:
                 gs = entry.get("gs") if hand_id else None
-                rev = bool(teach or _ended_by_showdown(gs)) if gs is not None else bool(teach)
+                rev = (
+                    bool(teach or _ended_by_showdown(gs))
+                    if gs is not None
+                    else bool(teach)
+                )
             except Exception:
                 rev = bool(teach)
             parts.append(
@@ -460,7 +500,9 @@ def ui_toggle_teach(request: HttpRequest) -> HttpResponse:
             )
         )
         html = "\n".join(parts)
-        return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+        return _oob_response(
+            html, route=t0_route, method=method, status_label=status_label
+        )
     finally:
         pass
 
@@ -499,7 +541,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
                 metrics.inc_api_error("ui_next", "t409_session_ended")
             except Exception:
                 pass
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         # Find latest completed hand for this session
         latest_gs, latest_cfg = None, None
@@ -515,7 +559,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         if latest_gs is None or getattr(latest_gs, "street", None) != "complete":
             status_label = "409"
             html = _render_error_only(request, "Cannot start next hand now")
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         # 规划下一手
         from poker_core.session_flow import next_hand
@@ -531,7 +577,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
         if max_hands and int(s.hand_counter or 0) >= max_hands:
             from .views_play import finalize_session
 
-            summary = finalize_session(s, latest_gs, "max_hands", last_hand_id=latest_hid)
+            summary = finalize_session(
+                s, latest_gs, "max_hands", last_hand_id=latest_hid
+            )
             reason_map = {
                 "bust": "Insufficient chips to post blinds",
                 "max_hands": "Maximum hands reached",
@@ -550,7 +598,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
                 metrics.inc_api_error("ui_next", "t409_session_ended")
             except Exception:
                 pass
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
         sv = SessionView(
             session_id=s.session_id,
             button=int(s.button),
@@ -601,7 +651,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
                 metrics.inc_api_error("ui_next", "t409_session_ended")
             except Exception:
                 pass
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
         HANDS[new_hid] = {
             "gs": gs_new,
             "session_id": session_id,
@@ -636,7 +688,9 @@ def ui_session_next(request: HttpRequest, session_id: str) -> HttpResponse:
             )
         except Exception:
             pass
-        resp = _oob_response(html, route=t0_route, method=method, status_label=status_label)
+        resp = _oob_response(
+            html, route=t0_route, method=method, status_label=status_label
+        )
         # Only push URL when a new hand is successfully started
         resp["HX-Push-Url"] = f"/api/v1/ui/game/{session_id}/{new_hid}"
         return resp
@@ -654,7 +708,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
         if not entry or entry.get("gs") is None:
             status_label = "404"
             html = _render_error_only(request, "Object not found or expired")
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         s = get_object_or_404(Session, session_id=entry.get("session_id"))
         gs = entry.get("gs")
@@ -675,7 +731,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 replay_url=f"/api/v1/ui/replay/{hand_id}",  # 添加replay URL
                 log_items=_log_items(gs),
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
         # 非结束态再构建 actions
         actions = _actions_model(gs)
 
@@ -694,7 +752,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 actions=actions,
                 error_text="Invalid suggest parameters",
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
 
         # 构建建议
         import time
@@ -713,7 +773,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 )
                 rationale = resp.get("rationale", []) or []
                 if any((r or {}).get("code") == "W_CLAMPED" for r in rationale):
-                    metrics.inc_clamped(resp.get("policy"), street=getattr(gs, "street", None))
+                    metrics.inc_clamped(
+                        resp.get("policy"), street=getattr(gs, "street", None)
+                    )
             except Exception:
                 pass
             try:
@@ -725,7 +787,66 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
             except Exception:
                 pass
 
-            coach_html = render_to_string("ui/_coach.html", {"suggest": resp}, request=request)
+            # Coach MVP switch (COACH_CARD_V1=on|1|true)
+            import os as _os
+
+            coach_v1 = str(_os.getenv("COACH_CARD_V1") or "off").lower() in (
+                "on",
+                "1",
+                "true",
+            )
+
+            # Preprocess suggest data for template
+            resp_processed = resp.copy()
+            policy = (resp.get("policy") or "").lower()
+            resp_processed["is_preflop"] = policy.startswith("preflop")
+
+            coach_html = render_to_string(
+                "ui/_coach.html",
+                {"suggest": resp_processed, "coach_v1": coach_v1},
+                request=request,
+            )
+            # Metrics: coach card view & action aggregates
+            try:
+                dm = (resp.get("debug", {}) or {}).get("meta", {})
+                mm = resp.get("meta", {}) or {}
+                tex = dm.get("board_texture") or mm.get("texture")
+                spr = dm.get("spr_bucket") or mm.get("spr_bucket")
+                role = dm.get("role") or mm.get("role")
+                facing = dm.get("facing_size_tag") or mm.get("facing_size_tag")
+                pot_type = dm.get("pot_type") or "single_raised"
+                strategy = dm.get("strategy") or "medium"
+                size_tag = (resp.get("meta", {}) or {}).get("size_tag")
+                action = (resp.get("suggested", {}) or {}).get("action")
+                metrics.inc_coach_view(
+                    getattr(gs, "street", "flop"),
+                    str(tex or "na"),
+                    str(spr or "na"),
+                    str(role or "na"),
+                )
+                if action:
+                    metrics.inc_coach_action(str(action), str(size_tag or ""))
+                # value-raise totals（识别 rationale 中的 FL_RAISE_VALUE）
+                try:
+                    if any(
+                        (r or {}).get("code") == "FL_RAISE_VALUE"
+                        for r in (resp.get("rationale", []) or [])
+                    ):
+                        metrics.inc_value_raise(
+                            street=getattr(gs, "street", "flop") or "flop",
+                            texture=str(tex or "na"),
+                            spr=str(spr or "na"),
+                            role=str(role or "na"),
+                            facing=str(facing or "na"),
+                            pot_type=str(pot_type or "single_raised"),
+                            strategy=str(strategy or "medium"),
+                        )
+                except Exception:
+                    pass
+                if coach_v1 and not ((resp.get("meta", {}) or {}).get("plan")):
+                    metrics.inc_coach_plan_missing(getattr(gs, "street", "flop"))
+            except Exception:
+                pass
             # Prefill amount if provided
             if resp.get("suggested", {}).get("amount") is not None:
                 actions["amount"]["default"] = int(resp["suggested"]["amount"])
@@ -741,13 +862,17 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
             html = _render_oob_fragments(
                 request, session=s, st=st, actions=actions, coach_html=coach_html
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
         except PermissionError:
             status_label = "409"
             html = _render_oob_fragments(
                 request, session=s, st=st, actions=actions, error_text="Not your turn"
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
         except ValueError:
             status_label = "422"
             html = _render_oob_fragments(
@@ -757,7 +882,9 @@ def ui_coach_suggest(request: HttpRequest, hand_id: str) -> HttpResponse:
                 actions=actions,
                 error_text="Suggestion unavailable",
             )
-            return _oob_response(html, route=t0_route, method=method, status_label=status_label)
+            return _oob_response(
+                html, route=t0_route, method=method, status_label=status_label
+            )
     finally:
         pass
 
@@ -766,7 +893,9 @@ def _render_error_only(request: HttpRequest, text: str) -> str:
     return render_to_string("ui/_error.html", {"text": text}, request=request)
 
 
-def _oob_response(html: str, *, route: str, method: str, status_label: str) -> HttpResponse:
+def _oob_response(
+    html: str, *, route: str, method: str, status_label: str
+) -> HttpResponse:
     try:
         metrics.observe_request(route, method, status_label, 0.0)
     except Exception:

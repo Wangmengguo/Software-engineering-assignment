@@ -36,8 +36,34 @@ def _validate_size_tag(obj: Any, path: str, errors: list[str]) -> None:
                 errors.append(f"invalid size_tag at {path}: {st}")
 
 
+def _validate_facing(
+    obj: Any, path: str, errors: list[str], warnings: list[str]
+) -> None:
+    if not isinstance(obj, dict):
+        return
+    facing = obj.get("facing")
+    if facing is None:
+        return
+    if not isinstance(facing, dict):
+        errors.append(f"facing must be object at {path}")
+        return
+    allowed = {"third", "half", "two_third_plus"}
+    for k, v in facing.items():
+        if k not in allowed:
+            warnings.append(f"unknown facing key at {path}: {k}")
+            continue
+        if not isinstance(v, dict) or v.get("action") not in ("raise", "call", "fold"):
+            errors.append(f"invalid facing leaf at {path}.{k}")
+            continue
+        if v.get("action") == "raise":
+            st = v.get("size_tag")
+            if st not in ("third", "half", "two_third", "pot"):
+                errors.append(f"invalid facing size_tag at {path}.{k}: {st}")
+
+
 def validate_rules(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    warnings: list[str] = []
     if "single_raised" not in data:
         errors.append("missing key: single_raised")
         return errors
@@ -86,6 +112,19 @@ def validate_rules(data: dict[str, Any]) -> list[str]:
                     # validate leaf size_tag domains
                     for k, v in snode.items():
                         _validate_size_tag(v, f"{role}.{pos}.{tex}.{spr}.{k}", errors)
+                        if k == "value_two_pair_plus":
+                            _validate_facing(
+                                v, f"{role}.{pos}.{tex}.{spr}.{k}", errors, warnings
+                            )
+    # print warnings as JSON once
+    if warnings:
+        print(
+            json.dumps(
+                {"warnings": warnings[:16], "warning_count": len(warnings)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     return errors
 
 

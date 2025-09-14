@@ -13,6 +13,7 @@
     "threebet_bucket_small_le": 9,
     "threebet_bucket_mid_le": 11,
     "flop_facing_small_le": 0.45,
-    "flop_facing_mid_le": 0.75
+    "flop_facing_mid_le": 0.75,
+    "postflop_cap_ratio": 0.8
   }
 }
