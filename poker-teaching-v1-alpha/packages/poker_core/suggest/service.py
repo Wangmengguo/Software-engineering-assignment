@@ -112,7 +112,9 @@ def _clamp_amount_if_needed(
 
 
 # 策略注册表（按版本/街选择）。PR-0：v1 映射到 v0 占位，保证行为不变。
-PolicyFn = Callable[[Observation, PolicyConfig], tuple[dict[str, Any], list[dict[str, Any]], str]]
+PolicyFn = Callable[
+    [Observation, PolicyConfig], tuple[dict[str, Any], list[dict[str, Any]], str]
+]
 POLICY_REGISTRY_V0: dict[str, PolicyFn] = {
     "preflop": policy_preflop_v0,
     "flop": policy_postflop_v0_3,
@@ -172,14 +174,24 @@ def _build_observation(
     try:
         p0 = getattr(gs, "players")[0]
         p1 = getattr(gs, "players")[1]
-        invested = int(getattr(p0, "invested_street", 0)) + int(getattr(p1, "invested_street", 0))
+        invested = int(getattr(p0, "invested_street", 0)) + int(
+            getattr(p1, "invested_street", 0)
+        )
         # Invariant: pot_now is the current pot excluding hero's pending to_call
         # (includes blinds and opponent's invested chips, but not the hero's next call amount).
         # Pot odds must be computed as: to_call / (pot_now + to_call).
         pot_now = pot + invested
         eff_stack = min(
-            (int(getattr(p0, "stack", 0)) if actor == 0 else int(getattr(p1, "stack", 0))),
-            (int(getattr(p1, "stack", 0)) if actor == 0 else int(getattr(p0, "stack", 0))),
+            (
+                int(getattr(p0, "stack", 0))
+                if actor == 0
+                else int(getattr(p1, "stack", 0))
+            ),
+            (
+                int(getattr(p1, "stack", 0))
+                if actor == 0
+                else int(getattr(p0, "stack", 0))
+            ),
         )
         spr_val = calc_spr(pot_now, eff_stack)
         spr_bkt = _spr_bucket(spr_val)
@@ -202,6 +214,13 @@ def _build_observation(
 
     # facing size tag (only meaningful when to_call>0)
     fst = derive_facing_size_tag(to_call, int(locals().get("pot_now", pot)))
+    # pot type inference (preflop raises count)
+    try:
+        from .utils import infer_pot_type
+
+        pot_type_val = infer_pot_type(gs)
+    except Exception:
+        pot_type_val = "single_raised"
 
     # hand_class on flop: use 6-bucket inference; otherwise keep analysis hand_class
     try:
@@ -231,13 +250,16 @@ def _build_observation(
         ip=_is_ip(actor, table_mode, button, street),
         pot_now=int(locals().get("pot_now", pot)),
         combo=(
-            combo_from_hole(getattr(getattr(gs, "players", [None, None])[actor], "hole", []) or [])
+            combo_from_hole(
+                getattr(getattr(gs, "players", [None, None])[actor], "hole", []) or []
+            )
             or ""
         ),
         role=role,
         range_adv=bool(range_adv),
         nut_adv=bool(nut_adv),
         facing_size_tag=fst,
+        pot_type=str(pot_type_val),
     )
     return obs, pre_rationale
 
@@ -286,16 +308,43 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
         ):
             size_tag = (meta_from_policy or {}).get("size_tag")
             if size_tag:
-                amt = size_to_amount(
-                    pot=int(getattr(obs, "pot_now", obs.pot) or 0),
-                    last_bet=int(getattr(gs, "last_bet", 0) or 0),
-                    size_tag=str(size_tag),
-                    bb=int(obs.bb or 1),
-                )
+                if suggested.get("action") == "raise":
+                    # use raise-to semantics for postflop
+                    try:
+                        from .utils import raise_to_amount
+
+                        modes, _ = get_modes()
+                        cap_ratio = (
+                            (modes.get("HU", {}) or {}).get("postflop_cap_ratio", 0.85)
+                            if isinstance(modes, dict)
+                            else 0.85
+                        )
+                    except Exception:
+                        cap_ratio = 0.85
+                    eff_stack = None  # conservative; service-level clamp will still enforce bounds
+                    amt = raise_to_amount(
+                        pot_now=int(getattr(obs, "pot_now", obs.pot) or 0),
+                        last_bet=int(getattr(gs, "last_bet", 0) or 0),
+                        size_tag=str(size_tag),
+                        bb=int(obs.bb or 1),
+                        eff_stack=eff_stack,
+                        cap_ratio=float(cap_ratio),
+                    )
+                else:
+                    amt = size_to_amount(
+                        pot=int(getattr(obs, "pot_now", obs.pot) or 0),
+                        last_bet=int(getattr(gs, "last_bet", 0) or 0),
+                        size_tag=str(size_tag),
+                        bb=int(obs.bb or 1),
+                    )
                 if amt is not None:
                     suggested["amount"] = int(amt)
         # Min-reopen lift for postflop raise sizing (to-amount semantics)
-        if suggested and suggested.get("action") == "raise" and suggested.get("amount") is not None:
+        if (
+            suggested
+            and suggested.get("action") == "raise"
+            and suggested.get("amount") is not None
+        ):
             try:
                 raise_spec = next((a for a in acts if a.action == "raise"), None)
                 if (
@@ -363,25 +412,38 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
     if meta_clean:
         resp["meta"] = meta_clean
 
-    # Compute confidence after clamp, based on rationale codes
+    # Compute confidence after clamp, based on rationale codes + meta hints (small tweaks)
     try:
         codes = {str((r or {}).get("code")) for r in (rationale or [])}
         hit_range = any(
-            c in {"PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET", "PF_DEFEND_PRICE_OK"} for c in codes
+            c in {"PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET", "PF_DEFEND_PRICE_OK"}
+            for c in codes
         )
         price_or_size_ok = any(
-            c in {"PF_DEFEND_PRICE_OK", "PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET"} for c in codes
+            c in {"PF_DEFEND_PRICE_OK", "PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET"}
+            for c in codes
         )
         fallback = any(
-            c in {"CFG_FALLBACK_USED", "PF_NO_LEGAL_RAISE", "PF_LIMP_COMPLETE_BLIND"} for c in codes
+            c in {"CFG_FALLBACK_USED", "PF_NO_LEGAL_RAISE", "PF_LIMP_COMPLETE_BLIND"}
+            for c in codes
         )
-        base = (
-            0.5
-            + (0.3 if hit_range else 0.0)
-            + (0.2 if price_or_size_ok else 0.0)
-            - (0.1 if clamped else 0.0)
-            - (0.1 if fallback else 0.0)
+        meta_all = resp.get("meta") or {}
+        hit_mainline = (
+            str(resp.get("policy")) == "flop_v1"
+            and (meta_all.get("size_tag") is not None)
+            and int(getattr(obs, "to_call", 0) or 0) == 0
         )
+        has_plan = (
+            isinstance(meta_all.get("plan"), str)
+            and len(str(meta_all.get("plan") or "")) > 0
+        )
+        base = 0.5
+        base += 0.3 if hit_range else 0.0
+        base += 0.2 if price_or_size_ok else 0.0
+        base += 0.05 if hit_mainline else 0.0
+        base += 0.05 if has_plan else 0.0
+        base -= 0.1 if clamped else 0.0
+        base -= 0.1 if fallback else 0.0
         resp["confidence"] = max(0.5, min(0.9, base))
     except Exception:
         pass
@@ -401,7 +463,9 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
         try:
             to_call_bb_dbg = float(obs.to_call) / float(obs.bb) if obs.bb else 0.0
             open_to_bb_dbg = (
-                to_call_bb_dbg + 1.0 if obs.to_call and obs.street == "preflop" else None
+                to_call_bb_dbg + 1.0
+                if obs.to_call and obs.street == "preflop"
+                else None
             )
             pot_odds_dbg = (
                 (float(obs.to_call) / float(obs.pot_now + obs.to_call))
@@ -425,6 +489,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
             "table_mode": obs.table_mode,
             "spr_bucket": obs.spr_bucket,
             "board_texture": obs.board_texture,
+            "pot_type": getattr(obs, "pot_type", "single_raised"),
             "rollout_pct": int(os.getenv("SUGGEST_V1_ROLLOUT_PCT") or 0),
             "rolled_to_v1": (version == "v1"),
             "config_versions": cfg_versions,
@@ -460,11 +525,19 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                     "street": obs.street,
                     "action": action,
                     "amount": amount,
-                    "config_profile": resp.get("debug", {}).get("meta", {}).get("config_profile"),
+                    "size_tag": (resp.get("meta") or {}).get("size_tag"),
+                    "plan": (resp.get("meta") or {}).get("plan"),
+                    "hand_class6": getattr(obs, "hand_class", None),
+                    "config_profile": resp.get("debug", {})
+                    .get("meta", {})
+                    .get("config_profile"),
                     "strategy": config_strategy_name(),
                     "rolled_to_v1": (version == "v1"),
                     "confidence": resp.get("confidence"),
-                    "to_call_bb": (float(obs.to_call) / float(obs.bb) if obs.bb else None),
+                    "pot_type": getattr(obs, "pot_type", None),
+                    "to_call_bb": (
+                        float(obs.to_call) / float(obs.bb) if obs.bb else None
+                    ),
                     "pot_odds": (
                         (float(obs.to_call) / float(obs.pot_now + obs.to_call))
                         if (obs.pot_now + obs.to_call) > 0

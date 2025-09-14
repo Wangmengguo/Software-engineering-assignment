@@ -18,6 +18,7 @@ from .types import Observation, PolicyConfig
 from .utils import (
     HC_MID_OR_THIRD_MINUS,
     HC_OP_TPTK,
+    HC_STRONG_DRAW,
     HC_VALUE,
     HC_WEAK_OR_AIR,
     find_action,
@@ -658,8 +659,8 @@ def policy_flop_v1(
     # Load rules (strategy-aware)
     rules, ver = get_flop_rules()
 
-    # Pot type: v1.0 supports only single_raised; treat others as fallback
-    pot_type = "single_raised"
+    # Pot type: support single_raised; limped added in v1.1; threebet TBD
+    pot_type = getattr(obs, "pot_type", "single_raised") or "single_raised"
     if pot_type not in (rules or {}):
         rationale.append(R(SCodes.CFG_FALLBACK_USED))
 
@@ -668,6 +669,8 @@ def policy_flop_v1(
     texture = obs.board_texture or "na"
     spr = obs.spr_bucket or "na"
     role = obs.role or "na"
+    if pot_type == "limped":
+        role = "na"
 
     # Facing a bet?
     to_call = int(obs.to_call or 0)
@@ -692,18 +695,33 @@ def policy_flop_v1(
 
     # 1) No bet yet: prefer c-bet on dry boards when PFR
     if to_call == 0:
-        node = _match_rule(
-            rules,
-            [
-                pot_type,
-                "role",
-                role,
-                ip_key,
-                texture,
-                spr,
-                str(obs.hand_class or "unknown"),
-            ],
-        ) or _match_rule(rules, [pot_type, "role", role, ip_key, texture])
+        node = None
+        if pot_type == "limped":
+            node = _match_rule(
+                rules,
+                [
+                    pot_type,
+                    "role",
+                    "na",
+                    ip_key,
+                    texture,
+                    spr,
+                    str(obs.hand_class or "unknown"),
+                ],
+            ) or _match_rule(rules, [pot_type, "role", "na", ip_key, texture])
+        else:
+            node = _match_rule(
+                rules,
+                [
+                    pot_type,
+                    "role",
+                    role,
+                    ip_key,
+                    texture,
+                    spr,
+                    str(obs.hand_class or "unknown"),
+                ],
+            ) or _match_rule(rules, [pot_type, "role", role, ip_key, texture])
 
         if node:
             action = str(node.get("action") or "bet")
@@ -749,15 +767,77 @@ def policy_flop_v1(
             rationale.append(R(SCodes.FL_CHECK_RANGE))
             return {"action": "check"}, rationale, "flop_v1", meta
 
-    # 2) Facing a bet: show MDF/pot_odds in rationale and choose simple line
-    # Teaching-first, no mixing: defend versus small sizes; tighten vs large
+    # 2) Facing a bet: first check JSON-driven value-raise; otherwise show MDF/pot_odds and choose simple line
     fst = getattr(obs, "facing_size_tag", "na")
+    allow_value_raise = (os.getenv("SUGGEST_FLOP_VALUE_RAISE") or "1").strip() != "0"
+
+    # JSON-driven value raise: lookup facing rules under current class node
+    try:
+        if (
+            allow_value_raise
+            and str(obs.hand_class) == HC_VALUE
+            and fst in {"third", "half", "two_third+"}
+        ):
+            # resolve role path (limped uses role='na')
+            _role = role if pot_type != "limped" else "na"
+            # traverse dicts without defaults for precision
+            pot_node = (rules or {}).get(pot_type, {})
+            role_node = (pot_node.get("role", {}) or {}).get(_role, {})
+            pos_node = (role_node.get(ip_key, {}) or {}).get(texture, {})
+            spr_node = pos_node.get(spr, {}) or {}
+            cls_node = spr_node.get("value_two_pair_plus", {}) or {}
+            facing = cls_node.get("facing") if isinstance(cls_node, dict) else None
+            if isinstance(facing, dict):
+                key = "two_third_plus" if fst == "two_third+" else fst
+                fr = facing.get(key)
+                if isinstance(fr, dict) and fr.get("action") in {
+                    "raise",
+                    "call",
+                    "fold",
+                }:
+                    action = str(fr.get("action"))
+                    plan = fr.get("plan")
+                    if plan:
+                        meta["plan"] = plan
+                    if action == "raise" and find_action(acts, "raise"):
+                        st = str(fr.get("size_tag") or "half")
+                        meta["size_tag"] = st
+                        rationale.append(R(SCodes.FL_RAISE_VALUE))
+                        return {"action": "raise"}, rationale, "flop_v1", meta
+                    if action == "call" and find_action(acts, "call"):
+                        return {"action": "call"}, rationale, "flop_v1", meta
+                    if action == "fold" and find_action(acts, "fold"):
+                        return {"action": "fold"}, rationale, "flop_v1", meta
+    except Exception:
+        pass
+
+    # Default MDF 展示
     rationale.append(
         R(
             SCodes.FL_MDF_DEFEND,
             data={"mdf": meta["mdf"], "pot_odds": meta["pot_odds"], "facing": fst},
         )
     )
+    # threebet: add light value-raise and semi-bluff raise stubs
+    if getattr(obs, "pot_type", "single_raised") == "threebet":
+        # value raise vs small/half when we hold two_pair+ (OOP/IP)
+        if (
+            fst in {"third", "half"}
+            and getattr(obs, "hand_class", "") in {HC_VALUE}
+            and find_action(acts, "raise")
+        ):
+            meta["size_tag"] = "two_third"
+            rationale.append(R(SCodes.FL_RAISE_VALUE))
+            return {"action": "raise"}, rationale, "flop_v1", meta
+        # semi-bluff raise vs small when we have strong_draw (IP preferred but allow both)
+        if (
+            fst == "third"
+            and getattr(obs, "hand_class", "") in {HC_STRONG_DRAW}
+            and find_action(acts, "raise")
+        ):
+            meta["size_tag"] = "half"
+            rationale.append(R(SCodes.FL_RAISE_SEMI_BLUFF))
+            return {"action": "raise"}, rationale, "flop_v1", meta
     if fst in {"third", "half"} and find_action(acts, "call"):
         return {"action": "call"}, rationale, "flop_v1", meta
     # vs large sizes: if we have any raise path and nut_adv, allow raise stub (service will clamp)

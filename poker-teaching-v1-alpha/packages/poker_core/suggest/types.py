@@ -32,6 +32,8 @@ class Observation:
     range_adv: bool = False  # heuristic range advantage on flop
     nut_adv: bool = False  # heuristic nut advantage on flop
     facing_size_tag: str = "na"  # third | half | two_third+ | na
+    # v1.1: pot type classification (single_raised|limped|threebet)
+    pot_type: str = "single_raised"
 
 
 @dataclass(frozen=True)

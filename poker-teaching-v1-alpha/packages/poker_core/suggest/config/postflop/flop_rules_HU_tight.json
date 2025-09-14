@@ -922,4 +922,41 @@
       }
     }
   }
+  ,
+  "limped": {
+    "role": {
+      "na": {
+        "ip": {
+          "dry": {"defaults": {"action": "check"}},
+          "semi": {"le3": {"strong_draw": {"action": "bet", "size_tag": "half", "plan": "bet/call vs small; fold vs pot"}}},
+          "wet": {"le3": {"value_two_pair_plus": {"action": "bet", "size_tag": "pot"}}}
+        },
+        "oop": {
+          "semi": {"le3": {"strong_draw": {"action": "bet", "size_tag": "half", "plan": "lead half; continue on safe turns"}}},
+          "wet": {"le3": {"value_two_pair_plus": {"action": "bet", "size_tag": "pot", "plan": "bet big; barrel safe turns"}}}
+        }
+      }
+    }
+  }
+  ,
+  "threebet": {
+    "role": {
+      "pfr": {
+        "ip": {
+          "dry": {"defaults": {"action": "bet", "size_tag": "half"}},
+          "semi": {"defaults": {"action": "bet", "size_tag": "half"}},
+          "wet": {"defaults": {"action": "check"}}
+        },
+        "oop": {
+          "dry": {"defaults": {"action": "check"}},
+          "semi": {"defaults": {"action": "check"}},
+          "wet": {"defaults": {"action": "check"}}
+        }
+      },
+      "caller": {
+        "ip": {"dry": {"defaults": {"action": "check"}}, "semi": {"defaults": {"action": "check"}}, "wet": {"defaults": {"action": "check"}}},
+        "oop": {"dry": {"defaults": {"action": "check"}}, "semi": {"defaults": {"action": "check"}}, "wet": {"defaults": {"action": "check"}}}
+      }
+    }
+  }
 }

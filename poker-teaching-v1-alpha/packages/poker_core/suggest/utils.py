@@ -148,6 +148,36 @@ def infer_pfr(gs) -> int | None:
     return pfr
 
 
+def infer_pot_type(gs) -> str:
+    """Classify preflop pot type by counting preflop raises in event stream.
+
+    - 0 raises → 'limped'
+    - 1 raise  → 'single_raised'
+    - ≥2 raises → 'threebet' (coarse; includes 4-bet+ cases for now)
+    """
+    try:
+        evts = list(getattr(gs, "events", []) or [])
+    except Exception:
+        return "single_raised"
+    raises = 0
+    for e in evts:
+        t = e.get("t")
+        if t == "board" and e.get("street") == "flop":
+            break
+        if t == "raise":
+            raises += 1
+        elif t == "allin" and str(e.get("as") or "").lower() == "raise":
+            raises += 1
+        elif t == "bet":
+            # opening bet at preflop shouldn't happen; ignore
+            pass
+    if raises <= 0:
+        return "limped"
+    if raises == 1:
+        return "single_raised"
+    return "threebet"
+
+
 def _modes_hu() -> dict[str, Any]:
     try:
         modes, _ = get_modes()
@@ -432,6 +462,40 @@ def size_to_amount(pot: int, last_bet: int, size_tag: str, bb: int) -> int | Non
     base = max(0, int(round(float(pot) * mult)))
     # 下注最小值通常 >= bb；此处先返回裸值，交由 service 钳制
     return max(base, 1)
+
+
+def raise_to_amount(
+    pot_now: int,
+    last_bet: int,
+    size_tag: str,
+    bb: int,
+    eff_stack: int | None = None,
+    cap_ratio: float | None = None,
+) -> int | None:
+    """Compute postflop raise to-amount by sizing tag.
+
+    - Use pot share to derive desired raise-to when possible.
+    - Apply optional cap: min(eff_stack * cap_ratio, target_to)
+    """
+    sizing_map = {
+        "third": 1.0 / 3.0,
+        "half": 0.5,
+        "two_third": 2.0 / 3.0,
+        "pot": 1.0,
+    }
+    mult = sizing_map.get(size_tag)
+    if mult is None:
+        return None
+    try:
+        target = int(
+            round(float(pot_now) * (1.0 + mult))
+        )  # to-amount ≈ call + raise add
+        if eff_stack is not None and cap_ratio is not None and cap_ratio > 0:
+            cap_to = int(round(float(eff_stack) * float(cap_ratio)))
+            target = min(target, cap_to)
+        return max(target, max(bb, last_bet + bb))
+    except Exception:
+        return None
 
 
 def stable_roll(hand_id: str, pct: int) -> bool:

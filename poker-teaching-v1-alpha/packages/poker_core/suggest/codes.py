@@ -164,6 +164,7 @@ class SCodes:
         "FL_MIN_REOPEN_ADJUSTED", "info", "已提升到最小合法 re-open 金额。"
     )
     FL_RAISE_SEMI_BLUFF = CodeDef("FL_RAISE_SEMI_BLUFF", "info", "强听半诈唬加注。")
+    FL_RAISE_VALUE = CodeDef("FL_RAISE_VALUE", "info", "价值加注（对手下注较小）。")
     FL_CHECK_RANGE = CodeDef("FL_CHECK_RANGE", "info", "不在下注范围，选择过牌。")
 
 
