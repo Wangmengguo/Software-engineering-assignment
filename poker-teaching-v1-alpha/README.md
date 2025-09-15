@@ -7,8 +7,13 @@
 - 领域引擎：`packages/poker_core/state_hu.py`（SB/BB 可配置；发盲→轮次→结算；筹码守恒）。
 - 评牌：优先 PokerKit，不可用时回退简化评估。
 - 会话流：多手对局（按钮轮转、承接筹码）；统一回放结构持久化至 DB。
-- 建议：`POST /api/v1/suggest`（preflop v0；仅从合法动作集合内选取，带钳制与理由）。
+- 建议（Suggest）：`POST /api/v1/suggest`（纯函数策略 + 合法性钳制 + 理由与教学 plan）。
+  - Preflop v1（HU）：RFI/BB 防守，支持 3bet to-bb 计算（`meta.reraise_to_bb/bucket`）。
+  - Flop v1（HU）：role+MDF 对齐；已覆盖 single_raised；limped 骨架；threebet（medium 骨架）。
+  - 价值加注 JSON 化：在规则中以 `facing{third,half,two_third_plus}` 指定 two_pair+ 的 value-raise（策略透传 size_tag/plan）。
+  - 统一 to-amount 口径：postflop `raise_to_amount` + `min‑reopen → cap → clamp`。
 - 前端最小 UI（MVP）：HTMX + Tailwind，无轮询、事件驱动；一次响应用 OOB 同步更新 HUD/牌面/行动条/金额/Coach/错误/座位与日志；Coach 显式触发；前端零推导（动作与金额范围完全由后端提供）。
+  - Coach 卡片（100% 开启）：一句话计划 + 尺寸标签 + pot_odds/MDF；Preflop/Flop 一致化展示（读 `meta/*`）。
 - 会话结束（MVP，仅两条规则）：
   - Bust：承接到下一手不足以贴盲（引擎 `start_hand_with_carry` 抛错）→ 结束。
   - Max Hands：达到 `max_hands`（如 20/50）→ 结束。
@@ -58,6 +63,22 @@ http://127.0.0.1:8000/api/v1/ui/game/<session_id>/<hand_id>
 
 交互节奏：仅在“执行动作 / 获取建议 / 开始下一手”时发起请求；其余时间零请求；每次响应用 OOB 片段统一更新多个区域。
 
+可选环境变量（与建议/教学相关）
+
+```bash
+# 策略与灰度
+export SUGGEST_POLICY_VERSION=v1           # v0|v1|v1_preflop|auto
+export SUGGEST_STRATEGY=medium            # loose|medium|tight
+export SUGGEST_V1_ROLLOUT_PCT=0           # auto 时生效
+export SUGGEST_FLOP_VALUE_RAISE=1         # 价值加注 JSON 化开关（默认 1）
+
+# 教学 Coach 开关
+export COACH_CARD_V1=1                    # 开启 Coach 卡片 MVP（Preflop/Flop）
+
+# 调试与观测
+export SUGGEST_DEBUG=1                    # 返回 debug.meta（含 pot_odds/pot_type/size_tag 等）
+```
+
 — 怎么用（API 快查） —
 
 - `POST /api/v1/session/start` 创建会话（可传 `sb/bb/max_hands`）
@@ -70,7 +91,9 @@ http://127.0.0.1:8000/api/v1/ui/game/<session_id>/<hand_id>
 - `GET  /api/v1/hand/<hid>/replay` 回放（兼容 `/api/v1/replay/<hid>`）
 - `GET  /api/v1/ui/replay/<hid>` 回放页面（SSR，一页内控件：Reset/Prev/Next/Play）
 - `POST /api/v1/suggest` 最小建议 `{hand_id, actor}`
-  - 响应：`{hand_id, actor, suggested{action,amount?}, rationale[], policy}`
+  - 响应：`{hand_id, actor, suggested{action,amount?}, rationale[], policy, meta?}`
+    - Preflop v1 关键 `meta`：`open_bb`｜`reraise_to_bb`｜`bucket`｜`pot_odds`
+    - Flop v1 关键 `meta`：`plan`｜`size_tag`｜`mdf`｜`facing_size_tag`｜`spr_bucket`｜`texture`｜`pot_type`
   - 错误：`404` 不存在，`409` 非行动者/已结束，`422` 无法给出合法建议
 
 会话推进/结束：
@@ -174,7 +197,7 @@ python scripts/suggest_debug_tool.py single --policy v1_preflop --debug 1 --seed
     - `_action_form.html`（整表单 OOB；当 hand 变化时整体替换，确保 hx-post 指向新 hand）
     - `_actions.html`（动作按钮）
     - `_amount.html`（金额输入显示/范围/默认值）
-    - `_coach.html`（建议/理由）
+    - `_coach.html`（建议/理由/Coach 卡片：一句话计划 + pot_odds/MDF + 尺寸）
     - `_coach_trigger.html`（“Get Suggestion”按钮）
     - `_teach_toggle.html`（对局页头部 Teach/Practice 开关，触发 `POST /api/v1/ui/prefs/teach`）
     - `_session_end.html`（会话结束卡片：Hands / Stacks / PnL / Reason + 按钮）
@@ -186,19 +209,31 @@ python scripts/suggest_debug_tool.py single --policy v1_preflop --debug 1 --seed
   - Coach 显式触发；CSRF 通过 `{% csrf_token %}` 与 `hx-headers` 注入
   - 首屏 SSR 为真数据；OOB 与刷新效果一致（Session 结束时 SSR 直接渲染结束卡片；回放页 SSR 直接可用）。
 
-调试与日志（看什么 / 好坏阈值 / 怎么调）
+— 测试与观测（Test/Observe） —
+
+- 运行测试：`pytest -q`
+- 规则 Gate（Flop）：`python scripts/check_flop_rules.py`（medium 硬 Gate）；`python scripts/check_flop_rules.py --all`（三档 smoke + 单调检查）
+- 结构化日志建议：`suggest_v1` 事件包含 `size_tag/plan/hand_class6/pot_type` 等；可按 `street/texture/role/spr_bucket/size_tag/hand_class6/plan` 聚合。
+- Prom 指标：
+  - `suggest_*`（延迟/动作/钳制/错误）
+  - `coach_card_*`（view/action/plan_missing）
+  - `flop_value_raise_total{street,texture,spr,role,facing_size_tag,pot_type,strategy}`（价值加注覆盖率与分布）
+
+— 调试与日志（Fix/Debug） —
 - `debug.meta`（当 `SUGGEST_DEBUG=1`）主要字段：
   - `to_call_bb` / `open_to_bb` / `pot_odds`：校验赔率口径是否一致
   - `reraise_to_bb` / `fourbet_to_bb` / `cap_bb`：尺寸与封顶检查（若经常触发 `PF_*_MIN_RAISE_ADJUSTED` 或 `W_CLAMPED`，考虑增大 mult 或调整 cap）
   - `bucket` / `strategy` / `config_versions`：归因与追踪
-- 结构化日志：包含 `threebet_to_bb` / `fourbet_to_bb` / `pot_odds` / `bucket` 等；灰度期用来定位金额异常。
+- 结构化日志：包含 `size_tag/plan/hand_class6/pot_type/threebet_to_bb/fourbet_to_bb/pot_odds/bucket` 等；灰度期用来定位金额异常。
 - 调参入口：`packages/poker_core/suggest/config/table_modes_{strategy}.json`
   - `reraise_ip_mult` / `reraise_oop_mult` / `reraise_oop_offset` / `cap_ratio`
+  - `postflop_cap_ratio`（Flop raise to‑amount 封顶比例）
   - `fourbet_ip_mult` / `cap_ratio_4b`
   - `threebet_bucket_small_le` / `threebet_bucket_mid_le`
 - 范围入口：`packages/poker_core/suggest/config/ranges/*.json`
   - `preflop_open_HU_{strategy}.json`（RFI）
   - `preflop_vs_raise_HU_{strategy}.json`（BB_vs_SB 的 `call/reraise`，以及 `SB_vs_BB_3bet` 的 `fourbet/call`）
+  - Flop：`postflop/flop_rules_HU_{strategy}.json`（pot_type×role×ip/oop×texture×spr×hand_class6；支持 `facing` 的 value‑raise JSON 化）
 
 CI Ranges Gate（零依赖）
 - 工作流会运行 `node scripts/check_preflop_ranges.js --dir packages/poker_core/suggest/config`，校验：
