@@ -328,7 +328,7 @@ def policy_preflop_v1(
     defend_ip = float(modes.get("defend_threshold_ip", 0.42))
     defend_oop = float(modes.get("defend_threshold_oop", 0.38))
 
-    to_call = int(obs.to_call or 0)
+    to_call = int(obs.to_call if obs.to_call is not None else to_call_from_acts(acts))
     bb = int(obs.bb or 50)
     pot_now = int(getattr(obs, "pot_now", 0))
     price = _pot_odds(to_call, pot_now)
@@ -349,7 +349,7 @@ def policy_preflop_v1(
         return suggested, rationale + decision_rationale, "preflop_v1", dict(decision_meta)
 
     # Fallbacks for edge cases not covered by dedicated helpers
-    is_sb_first_in = obs.street == "preflop" and obs.to_call == 0 and bool(obs.first_to_act)
+    is_sb_first_in = obs.street == "preflop" and bool(obs.first_to_act)
     if is_sb_first_in:
         open_set = set(open_tab.get("SB", set()) or set())
         betlike = pick_betlike_action(acts)
@@ -358,7 +358,7 @@ def policy_preflop_v1(
         if find_action(acts, "call") and to_call > 0 and to_call <= bb:
             rationale.append(R(SCodes.PF_LIMP_COMPLETE_BLIND))
             return {"action": "call"}, rationale, "preflop_v1", {}
-        if find_action(acts, "check"):
+        if to_call == 0 and find_action(acts, "check"):
             return {"action": "check"}, rationale, "preflop_v1", {}
 
     if obs.street == "preflop" and to_call > 0:
