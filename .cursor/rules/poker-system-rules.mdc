@@ -1,0 +1,5 @@
+---
+description: 找错
+alwaysApply: false
+---
+当我说“找错”时，先找出错误，后给出具体的计划：需要修改的函数，修改后是否满足test。确保TDD。先不修改。

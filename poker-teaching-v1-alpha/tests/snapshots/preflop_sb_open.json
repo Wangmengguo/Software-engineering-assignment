@@ -1,0 +1,13 @@
+{
+  "codes": [
+    "PF_OPEN_RANGE_HIT"
+  ],
+  "meta": {
+    "open_bb": 2.5
+  },
+  "policy": "preflop_v1",
+  "suggested": {
+    "action": "raise",
+    "amount": 125
+  }
+}

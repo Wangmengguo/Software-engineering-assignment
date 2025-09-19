@@ -1,18 +1,42 @@
 from poker_core.domain.actions import LegalAction
 from poker_core.suggest.service import (
     POLICY_REGISTRY,
-    _build_observation,
-    _clamp_amount_if_needed,
+    POLICY_REGISTRY_V1,
+    build_suggestion,
 )
 
 
-def test_clamp_amount_if_needed_clamps_and_reports():
+def test_service_clamps_bet_and_reports_warn_clamped(monkeypatch):
+    # 通过公开入口：stub 合法动作与策略返回的越界金额
     acts = [LegalAction(action="bet", min=100, max=300)]
-    suggested = {"action": "bet", "amount": 500}
-    out, clamped, info = _clamp_amount_if_needed(suggested, acts)
-    assert clamped is True
-    assert out["amount"] == 300
-    assert info == {"min": 100, "max": 300, "given": 500, "chosen": 300}
+
+    def _legal_actions(_):
+        return acts
+
+    monkeypatch.setattr("poker_core.suggest.service.legal_actions_struct", _legal_actions)
+    monkeypatch.setenv("SUGGEST_POLICY_VERSION", "v1")
+
+    def _stub_policy(obs, cfg):
+        return {"action": "bet", "amount": 500}, [], "flop_stub"
+
+    monkeypatch.setitem(POLICY_REGISTRY_V1, "flop", _stub_policy)
+
+    gs = _DummyGS()
+    gs.street = "flop"
+    gs.to_act = 0
+
+    result = build_suggestion(gs, actor=0)
+
+    assert result["suggested"]["amount"] == 300
+    codes = {r.get("code") for r in result.get("rationale", [])}
+    assert "W_CLAMPED" in codes
+    clamp_items = [r for r in result["rationale"] if r.get("code") == "W_CLAMPED"]
+    assert clamp_items
+    info = clamp_items[-1].get("data") or clamp_items[-1].get("meta") or {}
+    assert info.get("min") == 100
+    assert info.get("max") == 300
+    assert info.get("given") == 500
+    assert info.get("chosen") == 300
 
 
 def test_policy_registry_contains_all_streets():
@@ -26,10 +50,11 @@ class _DummyGS:
         self.street = "flop"
         self.bb = 50
         self.pot = 0
+        self.to_act = 0
 
 
-def test_build_observation_injects_warning_on_analysis_failure(monkeypatch):
-    # 强制 analysis 抛错
+def test_build_suggestion_injects_warning_on_analysis_failure(monkeypatch):
+    # 强制 analysis 抛错，且通过公开入口 build_suggestion 断言预警注入
     import poker_core.suggest.service as svc
 
     def _boom(gs, actor):
@@ -37,8 +62,17 @@ def test_build_observation_injects_warning_on_analysis_failure(monkeypatch):
 
     monkeypatch.setattr(svc, "annotate_player_hand_from_gs", _boom)
 
-    gs = _DummyGS()
     acts = [LegalAction(action="check")]
-    obs, pre = _build_observation(gs, 0, acts)
-    assert obs.street == "flop"
-    assert pre and any(x.get("code") == "W_ANALYSIS" for x in pre)
+
+    def _legal_actions(_):
+        return acts
+
+    monkeypatch.setattr("poker_core.suggest.service.legal_actions_struct", _legal_actions)
+
+    gs = _DummyGS()
+    gs.street = "flop"
+    gs.to_act = 0
+
+    result = build_suggestion(gs, actor=0)
+    codes = {r.get("code") for r in result.get("rationale", [])}
+    assert "W_ANALYSIS" in codes
