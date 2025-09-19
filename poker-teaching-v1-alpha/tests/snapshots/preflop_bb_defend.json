@@ -1,0 +1,14 @@
+{
+  "codes": [
+    "PF_DEFEND_3BET"
+  ],
+  "meta": {
+    "bucket": "small",
+    "reraise_to_bb": 8
+  },
+  "policy": "preflop_v1",
+  "suggested": {
+    "action": "raise",
+    "amount": 400
+  }
+}

@@ -273,3 +273,30 @@ Tips
 - 常见 409：非当前行动者或手牌已结束；先 `GET /hand/state` 查看 `to_act/street` 再操作。
 - 教学/实战切换：对局页头部提供 Teach 开关按钮（默认 ON）。切换即发起 `POST /api/v1/ui/prefs/teach`，
   服务端写入会话首选项，随后用 OOB 片段刷新 seats 与开关；SSR 与 HTMX 路径遵循同一规则，无需前端推断。
+
+
+—— Suggest v1 重构补充说明（2025） ——
+
+做什么（What，新增/强化）
+- 统一决策契约 Decision：策略以 `Decision(action, SizeSpec)` 表达尺寸意图（翻前用 `bb` 倍数，翻后用 `size_tag`），由服务层统一解析为金额、处理“最小重开”并追加 `PL_MIN_REOPEN_LIFT` 提示。
+- 统一上下文 SuggestContext：集中加载策略档（loose/medium/tight）与表格/开关，不再在策略内 `os.getenv`；debug/log 输出携带 `config_versions/profile/strategy`。
+- 统一评估与观察：`observations.py` 按街构建 Observation，补齐 `pot_now/first_to_act/last_to_act/facing_size_tag/last_bet/last_aggressor`；`hand_strength.py` 将翻前标签与翻后六桶标准化到 `HandStrength`。
+- 规则命中路径：flop 策略在 `meta.rule_path` 返回命中路径（例如 `single_raised/role:pfr/ip/dry/le3/value_two_pair_plus/facing.half`），用于教学/排障。
+
+怎么跑（Run）
+- 正常启动方式不变（见上文）。如需启用新特性/策略版本：
+  - `SUGGEST_POLICY_VERSION=v1` 启用 v1（preflop+flop）；`SUGGEST_V1_ROLLOUT_PCT` 支持灰度。
+  - `SUGGEST_FLOP_VALUE_RAISE=1` 控制 flop value‑raise JSON 路径（默认 1）。
+  - `SUGGEST_PREFLOP_ENABLE_4BET=1` 启用 SB vs BB 3bet 的 4bet 路径（需配置提供对应 buckets）。
+
+怎么测（Test）
+- 单元与集成测试：`pytest -q` 覆盖 calculators/context/observations/策略子模块/Decision/服务整合。
+- 规则检查：`python scripts/check_flop_rules.py --all`（flop 规则一致性与覆盖）；`node scripts/check_preflop_ranges.js --dir packages/poker_core/suggest/config`（翻前范围 Gate）。
+- 快照回归：`tests/test_suggest_snapshots.py` 首次运行会在 `tests/snapshots/*.json` 生成基线，确认后复跑即可锁定回归。
+- 调试：设置 `SUGGEST_DEBUG=1`，在响应 `debug.meta` 查看 `rule_path/size_tag/open_bb/reraise_to_bb/cap_bb/pot_odds` 等。
+
+怎么修（Fix/Debug）
+- 最小重开：若策略计算金额低于 `raise.min`，由 Decision.resolve 自动提升并追加 `PL_MIN_REOPEN_LIFT`；如频繁触发，检查表中 `size_tag` 或 `modes.cap_ratio`/`postflop_cap_ratio`。
+- 金额越界：服务层 clamp 会追加一次 `WARN_CLAMPED` 并在 debug 提供 `{min,max,given,chosen}`。
+- 赔率口径：`pot_odds = to_call / (pot_now + to_call)`，其中 `pot_now` 由服务层/observation 注入（包含盲注与对手已投入，不含本次待跟注）。
+- 规则缺省：通过 `meta.rule_path` 快速定位命中链路；若落到 `defaults:*`，补齐 JSON 对应层级。

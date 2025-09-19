@@ -6,39 +6,28 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from ..analysis import annotate_player_hand_from_gs
+from poker_core.analysis import annotate_player_hand_from_gs
+from poker_core.suggest.observations import build_observation
+
 from ..domain.actions import LegalAction, legal_actions_struct, to_act_index
+from .calculators import pot_odds as calc_pot_odds
 from .codes import SCodes
 from .codes import mk_rationale as R
+from .context import SuggestContext
+from .decision import Decision
 from .policy import (
     policy_flop_v1,
     policy_postflop_v0_3,
     policy_preflop_v0,
     policy_preflop_v1,
 )
-from .preflop_tables import (
-    combo_from_hole,
-    config_profile_name,
-    config_strategy_name,
-    get_modes,
-    get_open_table,
-    get_vs_table,
-)
 from .types import Observation, PolicyConfig
-from .utils import (
-    calc_spr,
-    classify_flop,
-    derive_facing_size_tag,
-    drop_nones,
-    infer_pfr,
-    nut_advantage,
-    range_advantage,
-    size_to_amount,
-    stable_roll,
-    to_call_from_acts,
-)
-from .utils import is_ip as _is_ip
-from .utils import spr_bucket as _spr_bucket
+from .utils import drop_nones, size_to_amount, stable_roll
+
+
+def _build_observation(gs, actor: int, acts: list[LegalAction]):
+    """向后兼容的别名，用于测试文件"""
+    return build_observation(gs, actor, acts, annotate_fn=annotate_player_hand_from_gs)
 
 
 def _clamp_amount_if_needed(
@@ -112,9 +101,7 @@ def _clamp_amount_if_needed(
 
 
 # 策略注册表（按版本/街选择）。PR-0：v1 映射到 v0 占位，保证行为不变。
-PolicyFn = Callable[
-    [Observation, PolicyConfig], tuple[dict[str, Any], list[dict[str, Any]], str]
-]
+PolicyFn = Callable[[Observation, PolicyConfig], tuple[dict[str, Any], list[dict[str, Any]], str]]
 POLICY_REGISTRY_V0: dict[str, PolicyFn] = {
     "preflop": policy_preflop_v0,
     "flop": policy_postflop_v0_3,
@@ -143,127 +130,6 @@ def _choose_policy_version(hand_id: str) -> str:
     return "v0"
 
 
-def _build_observation(
-    gs, actor: int, acts: list[LegalAction]
-) -> tuple[Observation, list[dict[str, Any]]]:
-    # 从 analysis 取 tags/hand_class（失败时降级 unknown）
-    pre_rationale: list[dict[str, Any]] = []
-    try:
-        ann = annotate_player_hand_from_gs(gs, actor)
-        info = ann.get("info", {})
-        tags = list(info.get("tags", []) or [])
-        hand_class = info.get("hand_class", "unknown")
-    except Exception:
-        tags, hand_class = ["unknown"], "unknown"
-        pre_rationale.append(R(SCodes.WARN_ANALYSIS_MISSING))
-
-    hand_id = str(getattr(gs, "hand_id", ""))
-    street = str(getattr(gs, "street", "preflop"))
-    bb = int(getattr(gs, "bb", 50))
-    pot = int(getattr(gs, "pot", 0))
-    to_call = int(to_call_from_acts(acts))
-
-    # v1 扩展：table_mode/ip/texture/spr
-    table_mode = (os.getenv("SUGGEST_TABLE_MODE") or "HU").upper()
-    try:
-        button = int(getattr(gs, "button", 0))
-    except Exception:
-        button = 0
-    texture = classify_flop(getattr(gs, "board", []) or [])
-    # 决策点 SPR：pot_now = pot + invested_street_sum
-    try:
-        p0 = getattr(gs, "players")[0]
-        p1 = getattr(gs, "players")[1]
-        invested = int(getattr(p0, "invested_street", 0)) + int(
-            getattr(p1, "invested_street", 0)
-        )
-        # Invariant: pot_now is the current pot excluding hero's pending to_call
-        # (includes blinds and opponent's invested chips, but not the hero's next call amount).
-        # Pot odds must be computed as: to_call / (pot_now + to_call).
-        pot_now = pot + invested
-        eff_stack = min(
-            (
-                int(getattr(p0, "stack", 0))
-                if actor == 0
-                else int(getattr(p1, "stack", 0))
-            ),
-            (
-                int(getattr(p1, "stack", 0))
-                if actor == 0
-                else int(getattr(p0, "stack", 0))
-            ),
-        )
-        spr_val = calc_spr(pot_now, eff_stack)
-        spr_bkt = _spr_bucket(spr_val)
-    except Exception:
-        spr_bkt = "na"
-
-    # role / advantages
-    try:
-        pfr_seat = infer_pfr(gs)
-    except Exception:
-        pfr_seat = None
-    role = "na"
-    try:
-        if pfr_seat is not None:
-            role = "pfr" if int(pfr_seat) == int(actor) else "caller"
-    except Exception:
-        role = "na"
-    range_adv = range_advantage(str(texture.get("texture", "na")), role)
-    nut_adv = nut_advantage(str(texture.get("texture", "na")), role)
-
-    # facing size tag (only meaningful when to_call>0)
-    fst = derive_facing_size_tag(to_call, int(locals().get("pot_now", pot)))
-    # pot type inference (preflop raises count)
-    try:
-        from .utils import infer_pot_type
-
-        pot_type_val = infer_pot_type(gs)
-    except Exception:
-        pot_type_val = "single_raised"
-
-    # hand_class on flop: use 6-bucket inference; otherwise keep analysis hand_class
-    try:
-        hc = str(hand_class)
-        if street == "flop":
-            from .utils import (
-                infer_flop_hand_class_from_gs,
-            )
-
-            hc = infer_flop_hand_class_from_gs(gs, actor)
-    except Exception:
-        hc = str(hand_class)
-
-    obs = Observation(
-        hand_id=hand_id,
-        actor=int(actor),
-        street=street,
-        bb=bb,
-        pot=pot,
-        to_call=to_call,
-        acts=acts,
-        tags=tags,
-        hand_class=hc,
-        table_mode=table_mode,
-        spr_bucket=spr_bkt,
-        board_texture=str(texture.get("texture", "na")),
-        ip=_is_ip(actor, table_mode, button, street),
-        pot_now=int(locals().get("pot_now", pot)),
-        combo=(
-            combo_from_hole(
-                getattr(getattr(gs, "players", [None, None])[actor], "hole", []) or []
-            )
-            or ""
-        ),
-        role=role,
-        range_adv=bool(range_adv),
-        nut_adv=bool(nut_adv),
-        facing_size_tag=fst,
-        pot_type=str(pot_type_val),
-    )
-    return obs, pre_rationale
-
-
 def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[str, Any]:
     """Suggest 入口（纯函数策略版）。
 
@@ -281,8 +147,12 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
     if not acts:
         raise ValueError("No legal actions")
 
+    ctx = SuggestContext.build()
+
     # 组装 Observation
-    obs, pre_rationale = _build_observation(gs, actor, acts)
+    obs, pre_rationale = build_observation(
+        gs, actor, acts, annotate_fn=annotate_player_hand_from_gs, context=ctx
+    )
 
     # 选择策略（按版本 + 街）
     version = _choose_policy_version(str(getattr(gs, "hand_id", "")))
@@ -293,12 +163,36 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
 
     # 执行策略
     cfg = cfg or PolicyConfig()
+    suggested: dict[str, Any]
     out = policy_fn(obs, cfg)
-    if isinstance(out, tuple) and len(out) == 4:
-        suggested, rationale, policy_name, meta_from_policy = out  # type: ignore
+
+    decision_obj: Decision | None = None
+    meta_from_policy: dict[str, Any] = {}
+
+    if isinstance(out, Decision):
+        decision_obj = out
+        rationale = []
+        policy_name = "unknown"
+    elif isinstance(out, tuple):
+        if out and isinstance(out[0], Decision):
+            decision_obj = out[0]
+            rationale = list(out[1]) if len(out) > 1 else []  # type: ignore
+            policy_name = str(out[2]) if len(out) > 2 else "unknown"
+            meta_from_policy = dict(out[3]) if len(out) > 3 else {}
+        elif len(out) == 4:
+            suggested, rationale, policy_name, meta_from_policy = out  # type: ignore
+        else:
+            suggested, rationale, policy_name = out  # type: ignore
+            meta_from_policy = {}
     else:
-        suggested, rationale, policy_name = out  # type: ignore
-        meta_from_policy = {}
+        raise ValueError("Policy returned unsupported response type")
+
+    if decision_obj is not None:
+        suggested, decision_meta, decision_rationale = decision_obj.resolve(obs, acts, cfg)
+        meta_from_policy = {**(decision_meta or {}), **(meta_from_policy or {})}
+        rationale = list(rationale or []) + list(decision_rationale or [])
+    else:
+        suggested = suggested  # type: ignore  # already set in non-decision branches
     # 若策略仅返回 size_tag（无金额），在服务层统一换算
     try:
         if (
@@ -313,7 +207,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                     try:
                         from .utils import raise_to_amount
 
-                        modes, _ = get_modes()
+                        modes = ctx.modes
                         cap_ratio = (
                             (modes.get("HU", {}) or {}).get("postflop_cap_ratio", 0.85)
                             if isinstance(modes, dict)
@@ -340,11 +234,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                 if amt is not None:
                     suggested["amount"] = int(amt)
         # Min-reopen lift for postflop raise sizing (to-amount semantics)
-        if (
-            suggested
-            and suggested.get("action") == "raise"
-            and suggested.get("amount") is not None
-        ):
+        if suggested and suggested.get("action") == "raise" and suggested.get("amount") is not None:
             try:
                 raise_spec = next((a for a in acts if a.action == "raise"), None)
                 if (
@@ -352,10 +242,14 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                     and raise_spec.min is not None
                     and int(suggested["amount"]) < int(raise_spec.min)
                 ):
+                    # Lift to legal minimum re-open amount.
                     suggested["amount"] = int(raise_spec.min)
-                    # append rationale later (after pre_rationale merge)
-                    meta_from_policy = dict(meta_from_policy or {})
-                    meta_from_policy.setdefault("_min_reopen_adjusted", True)
+                    # For legacy (non-Decision) policies, emit rationale to explain the lift
+                    # so UI/users know why the raise amount changed. Decision.resolve already
+                    # appends this code on its own; gate by decision_obj is None to avoid dupes.
+                    if decision_obj is None:
+                        rationale = list(rationale or [])
+                        rationale.append(R(SCodes.FL_MIN_REOPEN_ADJUSTED))
             except Exception:
                 pass
     except Exception:
@@ -364,13 +258,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
     # 注入预先的告警（例如分析缺失）
     if pre_rationale:
         rationale = list(pre_rationale) + list(rationale or [])
-    # Inject min-reopen adjusted rationale if flagged
-    try:
-        if (meta_from_policy or {}).get("_min_reopen_adjusted"):
-            rationale = list(rationale or [])
-            rationale.append(R(SCodes.FL_MIN_REOPEN_ADJUSTED))
-    except Exception:
-        pass
+    # 已由 Decision.resolve 追加 PL_MIN_REOPEN_LIFT；无需重复
 
     # 名称校验
     names = {a.action for a in acts}
@@ -416,16 +304,13 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
     try:
         codes = {str((r or {}).get("code")) for r in (rationale or [])}
         hit_range = any(
-            c in {"PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET", "PF_DEFEND_PRICE_OK"}
-            for c in codes
+            c in {"PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET", "PF_DEFEND_PRICE_OK"} for c in codes
         )
         price_or_size_ok = any(
-            c in {"PF_DEFEND_PRICE_OK", "PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET"}
-            for c in codes
+            c in {"PF_DEFEND_PRICE_OK", "PF_OPEN_RANGE_HIT", "PF_DEFEND_3BET"} for c in codes
         )
         fallback = any(
-            c in {"CFG_FALLBACK_USED", "PF_NO_LEGAL_RAISE", "PF_LIMP_COMPLETE_BLIND"}
-            for c in codes
+            c in {"CFG_FALLBACK_USED", "PF_NO_LEGAL_RAISE", "PF_LIMP_COMPLETE_BLIND"} for c in codes
         )
         meta_all = resp.get("meta") or {}
         hit_mainline = (
@@ -434,8 +319,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
             and int(getattr(obs, "to_call", 0) or 0) == 0
         )
         has_plan = (
-            isinstance(meta_all.get("plan"), str)
-            and len(str(meta_all.get("plan") or "")) > 0
+            isinstance(meta_all.get("plan"), str) and len(str(meta_all.get("plan") or "")) > 0
         )
         base = 0.5
         base += 0.3 if hit_range else 0.0
@@ -449,29 +333,19 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
         pass
 
     if (os.getenv("SUGGEST_DEBUG") or "0") == "1":
-        # config versions for quick diagnosis
-        _, ver_open = get_open_table()
-        _, ver_vs = get_vs_table()
-        _, ver_modes = get_modes()
         cfg_versions = {
-            "open": int(ver_open or 0),
-            "vs": int(ver_vs or 0),
-            "modes": int(ver_modes or 0),
+            "open": int(ctx.versions.get("open", 0)),
+            "vs": int(ctx.versions.get("vs", 0)),
+            "modes": int(ctx.versions.get("modes", 0)),
         }
-        profile = config_profile_name()
+        profile = ctx.profile.config_profile
         # debug units/deriveds for preflop v1 troubleshooting
         try:
             to_call_bb_dbg = float(obs.to_call) / float(obs.bb) if obs.bb else 0.0
             open_to_bb_dbg = (
-                to_call_bb_dbg + 1.0
-                if obs.to_call and obs.street == "preflop"
-                else None
+                to_call_bb_dbg + 1.0 if obs.to_call and obs.street == "preflop" else None
             )
-            pot_odds_dbg = (
-                (float(obs.to_call) / float(obs.pot_now + obs.to_call))
-                if (obs.pot_now + obs.to_call) > 0
-                else None
-            )
+            pot_odds_dbg = calc_pot_odds(obs.to_call, obs.pot_now)
             r2bb_dbg = None
             r2amt_dbg = None
             if resp.get("policy") == "preflop_v1":
@@ -494,7 +368,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
             "rolled_to_v1": (version == "v1"),
             "config_versions": cfg_versions,
             "config_profile": profile,
-            "strategy": config_strategy_name(),
+            "strategy": ctx.profile.strategy_name,
             # units
             "to_call_bb": to_call_bb_dbg,
             "open_to_bb": open_to_bb_dbg,
@@ -509,6 +383,7 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
             "range_adv": getattr(obs, "range_adv", False),
             "nut_adv": getattr(obs, "nut_adv", False),
             "facing_size_tag": getattr(obs, "facing_size_tag", "na"),
+            "rule_path": (resp.get("meta") or {}).get("rule_path"),
         }
         resp["debug"] = {"meta": debug_meta}
 
@@ -528,24 +403,17 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                     "size_tag": (resp.get("meta") or {}).get("size_tag"),
                     "plan": (resp.get("meta") or {}).get("plan"),
                     "hand_class6": getattr(obs, "hand_class", None),
-                    "config_profile": resp.get("debug", {})
-                    .get("meta", {})
-                    .get("config_profile"),
-                    "strategy": config_strategy_name(),
+                    "config_profile": resp.get("debug", {}).get("meta", {}).get("config_profile"),
+                    "strategy": ctx.profile.strategy_name,
                     "rolled_to_v1": (version == "v1"),
                     "confidence": resp.get("confidence"),
                     "pot_type": getattr(obs, "pot_type", None),
-                    "to_call_bb": (
-                        float(obs.to_call) / float(obs.bb) if obs.bb else None
-                    ),
-                    "pot_odds": (
-                        (float(obs.to_call) / float(obs.pot_now + obs.to_call))
-                        if (obs.pot_now + obs.to_call) > 0
-                        else None
-                    ),
+                    "to_call_bb": (float(obs.to_call) / float(obs.bb) if obs.bb else None),
+                    "pot_odds": calc_pot_odds(obs.to_call, obs.pot_now),
                     "threebet_to_bb": (resp.get("meta") or {}).get("reraise_to_bb"),
                     "fourbet_to_bb": (resp.get("meta") or {}).get("fourbet_to_bb"),
                     "bucket": (resp.get("meta") or {}).get("bucket"),
+                    "rule_path": (resp.get("meta") or {}).get("rule_path"),
                 },
             )
     except Exception:

@@ -1,5 +1,4 @@
 import pytest
-
 from poker_core.domain.actions import LegalAction
 from poker_core.suggest.policy import policy_flop_v1
 from poker_core.suggest.types import Observation, PolicyConfig

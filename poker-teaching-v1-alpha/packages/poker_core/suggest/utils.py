@@ -178,6 +178,60 @@ def infer_pot_type(gs) -> str:
     return "threebet"
 
 
+def infer_last_aggressor_before(gs, street: str) -> int | None:
+    """推断进入某街之前的“上一轮最后一次加注者”。
+
+    规则（基于事件流 gs.events）：
+    - 识别当前街边界：
+      - preflop：无前一轮 → 返回 None。
+      - flop：扫描到 e.t=="board" 且 e.street=="flop" 之前（即 preflop 段），返回最后一个 bet/raise/allin(as in {bet,raise}) 的 who。
+      - turn：在 flop 段（board('flop') 之后、board('turn') 之前）返回最后 aggressor。
+      - river：在 turn 段（board('turn') 之后、board('river') 之前）返回最后 aggressor。
+    - 若没有匹配事件或结构缺失 → 返回 None。
+    """
+    try:
+        evts = list(getattr(gs, "events", []) or [])
+    except Exception:
+        return None
+
+    st = str(street or "preflop").lower()
+    if st == "preflop":
+        return None
+
+    target_segment = None
+    if st == "flop":
+        target_segment = "preflop"
+    elif st == "turn":
+        target_segment = "flop"
+    elif st == "river":
+        target_segment = "turn"
+    else:
+        return None
+
+    current = "preflop"
+    last = None
+    for e in evts:
+        t = e.get("t")
+        if t == "board":
+            s = str(e.get("street") or "").lower()
+            if s in {"flop", "turn", "river"}:
+                current = s
+            if current == st:
+                break
+            continue
+        # 仅统计目标段（上一轮）
+        if current != target_segment:
+            continue
+        if t in {"bet", "raise"}:
+            if "who" in e:
+                last = int(e["who"])
+        elif t == "allin":
+            as_kind = str(e.get("as") or "").lower()
+            if as_kind in {"bet", "raise"} and "who" in e:
+                last = int(e["who"])
+    return last
+
+
 def _modes_hu() -> dict[str, Any]:
     try:
         modes, _ = get_modes()
@@ -414,15 +468,59 @@ def position_of(actor: int, table_mode: str, button: int, street: str) -> str:
 
 
 def is_ip(actor: int, table_mode: str, button: int, street: str) -> bool:
-    """判断 actor 在当前街是否“在位”（最后行动）。
-    HU：preflop 按钮先手（OOP），翻后按钮后手（IP）。
+    """仅在翻后街定义 IP（最后行动）。
+
+    规则（HU）：
+    - preflop：不使用 IP/OOP 概念，统一返回 False（避免误用）。
+    - flop/turn/river：按钮位（SB）为 IP，即 actor == button。
     """
     try:
-        if (table_mode or "HU").upper() == "HU":
-            if street == "preflop":
-                return actor != int(button)
-            else:
-                return actor == int(button)
+        mode = (table_mode or "HU").upper()
+        st = str(street or "preflop").lower()
+        if mode == "HU":
+            if st in {"flop", "turn", "river"}:
+                return int(actor) == int(button)
+            # preflop 不用 IP 概念
+            return False
+    except Exception:
+        return False
+    return False
+
+
+def is_first_to_act(actor: int, table_mode: str, button: int, street: str) -> bool:
+    """判断在当前街是否首先行动（HU）。
+
+    - preflop：SB/按钮先行动 → actor == button
+    - 翻后：非按钮先行动 → actor != button
+    其它桌型暂不实现，返回 False。
+    """
+    try:
+        mode = (table_mode or "HU").upper()
+        st = str(street or "preflop").lower()
+        if mode == "HU":
+            if st == "preflop":
+                return int(actor) == int(button)
+            if st in {"flop", "turn", "river"}:
+                return int(actor) != int(button)
+    except Exception:
+        return False
+    return False
+
+
+def is_last_to_act(actor: int, table_mode: str, button: int, street: str) -> bool:
+    """与 is_first_to_act 对偶：是否最后行动（HU）。
+
+    - preflop：BB/非按钮最后行动 → actor != button
+    - 翻后：按钮最后行动 → actor == button
+    """
+    try:
+        mode = (table_mode or "HU").upper()
+        st = str(street or "preflop").lower()
+        if mode == "HU":
+            if st == "preflop":
+                return int(actor) != int(button)
+            if st in {"flop", "turn", "river"}:
+                return int(actor) == int(button)
     except Exception:
         return False
     return False
@@ -487,9 +585,7 @@ def raise_to_amount(
     if mult is None:
         return None
     try:
-        target = int(
-            round(float(pot_now) * (1.0 + mult))
-        )  # to-amount ≈ call + raise add
+        target = int(round(float(pot_now) * (1.0 + mult)))  # to-amount ≈ call + raise add
         if eff_stack is not None and cap_ratio is not None and cap_ratio > 0:
             cap_to = int(round(float(eff_stack) * float(cap_ratio)))
             target = min(target, cap_to)
