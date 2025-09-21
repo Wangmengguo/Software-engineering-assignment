@@ -150,6 +150,159 @@ def patch_analysis(monkeypatch):
                 LegalAction("fold"),
             ],
         ),
+        (
+            "turn_pfr_ip_nobet",
+            lambda: _GS(
+                street="turn",
+                button=0,
+                to_act=0,
+                pot=300,
+                players=(
+                    _Player(invested=150),
+                    _Player(invested=150),
+                ),
+                board=["Ah", "7c", "2d", "Td"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "check", "who": 1},
+                    {"t": "check", "who": 0},
+                    {"t": "board", "street": "turn"},
+                ],
+            ),
+            [
+                LegalAction("bet", min=50, max=1000),
+                LegalAction("check"),
+            ],
+        ),
+        (
+            "turn_facing_half_call",
+            lambda: _GS(
+                street="turn",
+                button=0,
+                to_act=1,
+                pot=100,
+                players=(
+                    _Player(invested=50),
+                    _Player(invested=50),
+                ),
+                board=["Ah", "7c", "2d", "Td"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "board", "street": "turn"},
+                    {"t": "bet", "who": 0, "amount": 100},
+                ],
+                last_bet=100,
+            ),
+            [
+                LegalAction("call", to_call=100),
+                LegalAction("fold"),
+            ],
+        ),
+        (
+            "turn_oop_check",
+            lambda: _GS(
+                street="turn",
+                button=0,
+                to_act=1,
+                pot=300,
+                players=(
+                    _Player(invested=150),
+                    _Player(invested=150),
+                ),
+                board=["Ah", "7c", "2d", "Td"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "board", "street": "turn"},
+                ],
+            ),
+            [
+                LegalAction("check"),
+            ],
+        ),
+        (
+            "river_pfr_ip_nobet",
+            lambda: _GS(
+                street="river",
+                button=0,
+                to_act=0,
+                pot=300,
+                players=(
+                    _Player(invested=150),
+                    _Player(invested=150),
+                ),
+                board=["Ah", "7c", "2d", "Td", "2c"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "check", "who": 1},
+                    {"t": "check", "who": 0},
+                    {"t": "board", "street": "turn"},
+                    {"t": "board", "street": "river"},
+                ],
+            ),
+            [
+                LegalAction("bet", min=50, max=1000),
+                LegalAction("check"),
+            ],
+        ),
+        (
+            "river_facing_half_call",
+            lambda: _GS(
+                street="river",
+                button=0,
+                to_act=1,
+                pot=100,
+                players=(
+                    _Player(invested=50),
+                    _Player(invested=50),
+                ),
+                board=["Ah", "7c", "2d", "Td", "2c"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "board", "street": "turn"},
+                    {"t": "board", "street": "river"},
+                    {"t": "bet", "who": 0, "amount": 100},
+                ],
+                last_bet=100,
+            ),
+            [
+                LegalAction("call", to_call=100),
+                LegalAction("fold"),
+            ],
+        ),
+        (
+            "river_oop_check",
+            lambda: _GS(
+                street="river",
+                button=0,
+                to_act=1,
+                pot=300,
+                players=(
+                    _Player(invested=150),
+                    _Player(invested=150),
+                ),
+                board=["Ah", "7c", "2d", "Td", "2c"],
+                events=[
+                    {"t": "raise", "who": 0, "to": 150},
+                    {"t": "call", "who": 1, "amount": 150},
+                    {"t": "board", "street": "flop"},
+                    {"t": "board", "street": "turn"},
+                    {"t": "board", "street": "river"},
+                ],
+            ),
+            [
+                LegalAction("check"),
+            ],
+        ),
     ],
 )
 def test_snapshot(name, gs_factory, acts, monkeypatch):

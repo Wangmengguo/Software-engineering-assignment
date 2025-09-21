@@ -47,6 +47,10 @@ def build_observation(
     street = str(getattr(gs, "street", "preflop") or "preflop").lower()
     if street == "flop":
         return build_flop_observation(gs, actor, acts, annotate_fn=annotate_fn, context=context)
+    if street == "turn":
+        return build_turn_observation(gs, actor, acts, annotate_fn=annotate_fn, context=context)
+    if street == "river":
+        return build_river_observation(gs, actor, acts, annotate_fn=annotate_fn, context=context)
     return build_preflop_observation(gs, actor, acts, annotate_fn=annotate_fn, context=context)
 
 
@@ -73,6 +77,32 @@ def build_flop_observation(
 ) -> tuple[Observation, list[dict]]:
     return _build_observation_common(
         gs, actor, acts, street_override="flop", annotate_fn=annotate_fn, context=context
+    )
+
+
+def build_turn_observation(
+    gs,
+    actor: int,
+    acts: Iterable[LegalAction],
+    *,
+    annotate_fn: Callable | None = None,
+    context: SuggestContext | None = None,
+) -> tuple[Observation, list[dict]]:
+    return _build_observation_common(
+        gs, actor, acts, street_override="turn", annotate_fn=annotate_fn, context=context
+    )
+
+
+def build_river_observation(
+    gs,
+    actor: int,
+    acts: Iterable[LegalAction],
+    *,
+    annotate_fn: Callable | None = None,
+    context: SuggestContext | None = None,
+) -> tuple[Observation, list[dict]]:
+    return _build_observation_common(
+        gs, actor, acts, street_override="river", annotate_fn=annotate_fn, context=context
     )
 
 
@@ -241,4 +271,6 @@ __all__ = [
     "build_observation",
     "build_preflop_observation",
     "build_flop_observation",
+    "build_turn_observation",
+    "build_river_observation",
 ]

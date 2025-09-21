@@ -15,11 +15,14 @@ from .codes import SCodes
 from .codes import mk_rationale as R
 from .context import SuggestContext
 from .decision import Decision
+from .explanations import render_explanations
 from .policy import (
     policy_flop_v1,
     policy_postflop_v0_3,
     policy_preflop_v0,
     policy_preflop_v1,
+    policy_river_v1,
+    policy_turn_v1,
 )
 from .types import Observation, PolicyConfig
 from .utils import drop_nones, size_to_amount, stable_roll
@@ -111,8 +114,8 @@ POLICY_REGISTRY_V0: dict[str, PolicyFn] = {
 POLICY_REGISTRY_V1: dict[str, PolicyFn] = {
     "preflop": policy_preflop_v1,
     "flop": policy_flop_v1,
-    "turn": policy_postflop_v0_3,
-    "river": policy_postflop_v0_3,
+    "turn": policy_turn_v1,
+    "river": policy_river_v1,
 }
 
 # Backward-compat alias for tests/importers
@@ -417,6 +420,20 @@ def build_suggestion(gs, actor: int, cfg: PolicyConfig | None = None) -> dict[st
                 },
             )
     except Exception:
+        pass
+
+    # Optional: render natural-language explanations for teaching UI
+    try:
+        # Minimal extras to enrich templates
+        extras = {
+            "action": (resp.get("suggested") or {}).get("action"),
+            "amount": (resp.get("suggested") or {}).get("amount"),
+        }
+        exp = render_explanations(rationale=rationale, meta=resp.get("meta"), extras=extras)
+        if exp:
+            resp["explanations"] = exp
+    except Exception:
+        # Keep optional; never fail the main suggest flow
         pass
 
     return drop_nones(resp)

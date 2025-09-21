@@ -5,7 +5,7 @@
 - 产出：Decision 契约、SuggestContext、Observation 拆分、rule_path 追踪、快照回归。
 
 ## 关键变更
-- 决策契约（新增）：`Decision(action, SizeSpec)`，由策略表达尺寸“意图”，服务/resolve 统一换算金额；最小重开在 `Decision.resolve` 中抬高并追加 `PL_MIN_REOPEN_LIFT`。
+- 决策契约（新增）：`Decision(action, SizeSpec)`，由策略表达尺寸“意图”，服务/resolve 统一换算金额；最小重开在 `Decision.resolve` 中抬高并追加 `FL_MIN_REOPEN_ADJUSTED`。
 - 上下文（新增）：`SuggestContext.build()` 加载表与开关（modes/open/vs + env），策略层不再 `os.getenv`。
 - 观察（升级）：`observations.py` 按街构建 Observation，新增 `pot_now/first_to_act/last_to_act/facing_size_tag/last_bet/last_aggressor`。
 - 评估统一：`hand_strength.py` 将翻前标签与翻后六桶统一为 `HandStrength`。
