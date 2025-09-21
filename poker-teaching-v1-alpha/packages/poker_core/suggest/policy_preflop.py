@@ -34,6 +34,29 @@ class PreflopDecision:
         return suggested, meta, rationale
 
 
+def _mode_thr(ctx: SuggestContext) -> tuple[float, float]:
+    modes = ctx.modes.get("HU", {}) if isinstance(ctx.modes, dict) else {}
+    small_le = float(modes.get("threebet_bucket_small_le", 9.0))
+    mid_le = float(modes.get("threebet_bucket_mid_le", 11.0))
+    return small_le, mid_le
+
+
+def _plan_sb_rfi(ctx: SuggestContext, combo: str) -> str:
+    small_le, mid_le = _mode_thr(ctx)
+    vs_sb = ctx.vs_table.get("SB_vs_BB_3bet", {}) or {}
+    fourbet_set = set()
+    call_set = set()
+    for bkt in ("small", "mid", "large"):
+        node = vs_sb.get(bkt, {}) or {}
+        fourbet_set |= set(node.get("fourbet") or node.get("reraise") or [])
+        call_set |= set(node.get("call") or [])
+    if combo in fourbet_set:
+        return f"若被 3bet：≤{int(small_le)}bb 四bet；≤{int(mid_le)}bb 四bet/跟注；更大 保守处理。"
+    if combo in call_set:
+        return f"若被 3bet：≤{int(small_le)}bb 跟注；≤{int(mid_le)}bb 跟注；更大 弃牌。"
+    return "若被 3bet：小/中档可考虑跟注；更大 弃牌。"
+
+
 def decide_sb_open(
     obs: Observation, ctx: SuggestContext, cfg: PolicyConfig
 ) -> PreflopDecision | None:
@@ -57,10 +80,11 @@ def decide_sb_open(
     open_bb = float(modes.get("open_bb", cfg.open_size_bb))
 
     rationale = [R(SCodes.PF_OPEN_RANGE_HIT, data={"open_bb": open_bb})]
+    plan_str = _plan_sb_rfi(ctx, combo)
     decision = Decision(
         action=betlike.action,
         sizing=SizeSpec.bb(open_bb),
-        meta={"open_bb": open_bb},
+        meta={"open_bb": open_bb, "plan": plan_str},
     )
     return PreflopDecision(decision=decision, rationale=rationale, meta={})
 
@@ -111,6 +135,7 @@ def decide_bb_defend(
                 "reraise_to_bb": reraise_to_bb,
                 "cap_bb": cap_bb,
                 "pot_odds": round(price, 4),
+                "plan": "若遭四bet 默认弃牌；仅 QQ+/AK 继续。",
             },
             min_reopen_code=SCodes.PF_DEFEND_3BET_MIN_RAISE_ADJUSTED,
         )
@@ -126,7 +151,11 @@ def decide_bb_defend(
             )
             decision = Decision(
                 action="call",
-                meta={"bucket": bucket, "pot_odds": round(price, 4)},
+                meta={
+                    "bucket": bucket,
+                    "pot_odds": round(price, 4),
+                    "plan": "进入翻牌：按 Flop v1（纹理+MDF）继续。",
+                },
             )
             return PreflopDecision(decision, rationale, meta={})
         else:
@@ -183,6 +212,7 @@ def decide_sb_vs_threebet(
                 data={"bucket": bucket, "threebet_to_bb": round(threebet_to_bb, 2)},
             )
         )
+        small_le, mid_le = _mode_thr(ctx)
         decision = Decision(
             action="raise",
             sizing=SizeSpec.bb(fourbet_to_bb),
@@ -192,6 +222,7 @@ def decide_sb_vs_threebet(
                 "threebet_to_bb": round(threebet_to_bb, 2),
                 "cap_bb": cap_bb,
                 "combo": combo,
+                "plan": f"面对 3bet：≤{int(small_le)}bb 4bet 到 {int(fourbet_to_bb)}bb；≤{int(mid_le)}bb 4bet；更大 谨慎/弃牌。",
             },
             min_reopen_code=SCodes.PF_ATTACK_4BET_MIN_RAISE_ADJUSTED,
         )
@@ -199,7 +230,14 @@ def decide_sb_vs_threebet(
 
     if combo in call_set and find_action(obs.acts, "call"):
         rationale.append(R(SCodes.PF_DEFEND_PRICE_OK, data={"bucket": bucket}))
-        decision = Decision(action="call", meta={"bucket": bucket})
+        small_le, mid_le = _mode_thr(ctx)
+        decision = Decision(
+            action="call",
+            meta={
+                "bucket": bucket,
+                "plan": f"面对 3bet：≤{int(small_le)}bb 跟注；≤{int(mid_le)}bb 跟注；更大 弃牌。",
+            },
+        )
         return PreflopDecision(decision, rationale, meta={})
 
     # Fallback: only call if pot odds are very good or 3bet is small

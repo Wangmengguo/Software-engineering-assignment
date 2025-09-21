@@ -15,6 +15,7 @@ from .decision import Decision, SizeSpec
 from .flop_rules import get_flop_rules
 from .policy_preflop import decide_bb_defend, decide_sb_open, decide_sb_vs_threebet
 from .preflop_tables import bucket_facing_size
+from .turn_river_rules import get_river_rules, get_turn_rules
 from .types import Observation, PolicyConfig
 from .utils import (
     HC_OP_TPTK,
@@ -305,14 +306,14 @@ def policy_preflop_v1(
 
     from poker_core.suggest.context import SuggestContext
 
-    ctx = obs.context if getattr(obs, "context", None) else SuggestContext.build()
+    ctx = obs.context or SuggestContext.build()
 
     combo = obs.combo or None
     if combo is None:
         rationale.append(R(SCodes.CFG_FALLBACK_USED))
 
     # Check if vs_table is effectively empty (fallback scenario)
-    vs_tab = ctx.vs_table
+    vs_tab = ctx.vs_table or {}
     bb_vs_sb = vs_tab.get("BB_vs_SB", {}) or {}
     sb_vs_bb_3bet = vs_tab.get("SB_vs_BB_3bet", {}) or {}
     if not bb_vs_sb and not sb_vs_bb_3bet:
@@ -459,7 +460,7 @@ def policy_flop_v1(
 
     from poker_core.suggest.context import SuggestContext
 
-    ctx = obs.context if getattr(obs, "context", None) else SuggestContext.build()
+    ctx = obs.context or SuggestContext.build()
 
     # Load rules (strategy-aware)
     rules, ver = get_flop_rules()
@@ -763,3 +764,175 @@ def policy_flop_v1(
 
 
 __all__.append("policy_flop_v1")
+
+
+# --------- Turn/River v1 (HU, minimal teaching-first) ---------
+
+
+def _policy_postflop_generic(
+    street: str, obs: Observation, cfg: PolicyConfig
+) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict[str, Any]]:
+    acts = list(obs.acts or [])
+    if not acts:
+        raise ValueError("No legal actions")
+
+    rules, ver = get_turn_rules() if street == "turn" else get_river_rules()
+
+    to_call = int(obs.to_call or 0)
+    pot_now = int(obs.pot_now or 0)
+    denom = pot_now + max(0, to_call)
+    pot_odds = (to_call / denom) if denom > 0 else 1.0
+    mdf = 1.0 - pot_odds
+
+    ip_key = "ip" if bool(obs.ip) else "oop"
+    texture = getattr(obs, "board_texture", "na") or "na"
+    spr_raw = getattr(obs, "spr_bucket", "na") or "na"
+    spr = _spr_key_for_rules(spr_raw)
+    role = getattr(obs, "role", "na") or "na"
+    pot_type = getattr(obs, "pot_type", "single_raised") or "single_raised"
+
+    rationale: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {
+        "size_tag": None,
+        "role": role,
+        "texture": texture,
+        "spr_bucket": spr,
+        "mdf": round(mdf, 4),
+        "pot_odds": round(pot_odds, 4),
+        "facing_size_tag": getattr(obs, "facing_size_tag", "na"),
+        "rules_ver": ver,
+        "plan": None,
+    }
+
+    def _lookup_node() -> tuple[dict[str, Any] | None, str]:
+        keys = [
+            pot_type,
+            "role",
+            role if pot_type != "limped" else "na",
+            ip_key,
+            texture,
+            spr,
+            str(obs.hand_class or "unknown"),
+        ]
+        cur: Any = rules
+        path: list[str] = []
+        try:
+            for k in keys:
+                if isinstance(cur, dict) and k in cur:
+                    cur = cur[k]
+                    path.append(k)
+                elif isinstance(cur, dict) and "defaults" in cur:
+                    cur = cur["defaults"]
+                    path.append(f"defaults:{k}")
+                else:
+                    return None, "/".join(path)
+                # Early stop if current node already specifies action/sizing
+                if isinstance(cur, dict) and ("action" in cur or "size_tag" in cur):
+                    return cur, "/".join(path)
+            if isinstance(cur, dict) and ("action" in cur or "size_tag" in cur):
+                return cur, "/".join(path)
+        except Exception:
+            return None, "/".join(path)
+        return None, "/".join(path)
+
+    # 1) No bet yet: use table or safe default
+    if to_call == 0:
+        node, rule_path = _lookup_node()
+        if node:
+            action = str(node.get("action") or "bet")
+            size_tag = str(node.get("size_tag") or "third")
+            meta["rule_path"] = rule_path
+            meta["size_tag"] = size_tag
+            plan_str = node.get("plan")
+            if isinstance(plan_str, str) and plan_str:
+                meta["plan"] = plan_str
+            if action in {"bet", "raise"} and (
+                find_action(acts, action) or pick_betlike_action(acts)
+            ):
+                decision = Decision(
+                    action=action, sizing=SizeSpec.tag(size_tag), meta={"size_tag": size_tag}
+                )
+                suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+                meta.update(dmeta)
+                return suggested, rationale + drat, f"{street}_v1", meta
+            if action == "check" and find_action(acts, "check"):
+                decision = Decision(action="check", meta={})
+                suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+                meta.update(dmeta)
+                return suggested, rationale + drat, f"{street}_v1", meta
+        # fallback
+        if pick_betlike_action(acts):
+            decision = Decision(
+                action="bet", sizing=SizeSpec.tag("third"), meta={"size_tag": "third"}
+            )
+            suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+            meta.update(dmeta)
+            return suggested, rationale + drat, f"{street}_v1", meta
+        if find_action(acts, "check"):
+            decision = Decision(action="check", meta={})
+            suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+            meta.update(dmeta)
+            return suggested, rationale + drat, f"{street}_v1", meta
+
+    # 2) Facing a bet: expose MDF/pot_odds; choose simple line
+    rationale.append(
+        R(
+            SCodes.FL_MDF_DEFEND,
+            data={
+                "mdf": meta["mdf"],
+                "pot_odds": meta["pot_odds"],
+                "facing": meta["facing_size_tag"],
+            },
+        )
+    )
+    # value raise stub: when hand_class indicates value (inherit flop class semantics if provided)
+    if (
+        getattr(obs, "hand_class", "") in {HC_VALUE}
+        and find_action(acts, "raise")
+        and meta["facing_size_tag"] in {"third", "half"}
+    ):
+        decision = Decision(
+            action="raise", sizing=SizeSpec.tag("two_third"), meta={"size_tag": "two_third"}
+        )
+        suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+        meta.update(dmeta)
+        rationale.append(R(SCodes.FL_RAISE_VALUE))
+        return suggested, rationale + drat, f"{street}_v1", meta
+    if meta["facing_size_tag"] in {"third", "half"} and find_action(acts, "call"):
+        decision = Decision(action="call", meta={})
+        suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+        meta.update(dmeta)
+        return suggested, rationale + drat, f"{street}_v1", meta
+    if find_action(acts, "call"):
+        decision = Decision(action="call", meta={})
+        suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+        meta.update(dmeta)
+        return suggested, rationale + drat, f"{street}_v1", meta
+    if find_action(acts, "fold"):
+        decision = Decision(action="fold", meta={})
+        suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+        meta.update(dmeta)
+        return suggested, rationale + drat, f"{street}_v1", meta
+    if find_action(acts, "check"):
+        decision = Decision(action="check", meta={})
+        suggested, dmeta, drat = decision.resolve(obs, acts, cfg)
+        meta.update(dmeta)
+        return suggested, rationale + drat, f"{street}_v1", meta
+    raise ValueError(f"No safe {street} v1 suggestion")
+
+
+def policy_turn_v1(obs: Observation, cfg: PolicyConfig):
+    return _policy_postflop_generic("turn", obs, cfg)
+
+
+def policy_river_v1(obs: Observation, cfg: PolicyConfig):
+    return _policy_postflop_generic("river", obs, cfg)
+
+
+__all__.extend(["policy_turn_v1", "policy_river_v1"])
+
+
+def _spr_key_for_rules(s: str) -> str:
+    """Map observation SPR buckets (low/mid/high) to config keys (le3/3to6/ge6)."""
+    m = {"low": "le3", "mid": "3to6", "high": "ge6"}
+    return m.get(str(s or "").lower(), str(s or "na"))

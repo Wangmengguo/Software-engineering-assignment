@@ -8,6 +8,9 @@ Each strategy includes:
 - `ranges/preflop_open_HU_{strategy}.json`: Opening ranges
 - `ranges/preflop_vs_raise_HU_{strategy}.json`: Facing raise ranges
 
+Teaching explanations (locale)
+- `explanations_zh.json`: Mapping from rationale `code` to Chinese templates used to render `resp.explanations`.
+
 At runtime:
 - Use `SUGGEST_STRATEGY` environment variable to select strategy (loose/medium/tight)
 - Use `SUGGEST_CONFIG_DIR` to override with external configuration directory
@@ -30,3 +33,4 @@ Sizing parameters
 
 Runtime toggle
 - Set `SUGGEST_PREFLOP_ENABLE_4BET=1` to enable the SB 4-bet path in policy v1.
+- Set `SUGGEST_LOCALE=zh` to select explanation language (defaults to `zh`).

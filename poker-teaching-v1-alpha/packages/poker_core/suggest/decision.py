@@ -76,7 +76,7 @@ class Decision:
             amount = int(size_from_bb(float(self.sizing.value), int(obs.bb or 1)))
         elif kind == "tag":
             if self.action == "raise":
-                ctx = obs.context if getattr(obs, "context", None) else SuggestContext.build()
+                ctx = obs.context or SuggestContext.build()
                 modes = ctx.modes.get("HU", {}) if isinstance(ctx.modes, dict) else {}
                 cap_ratio = float(modes.get("postflop_cap_ratio", 0.85))
                 amount = raise_to_amount(
