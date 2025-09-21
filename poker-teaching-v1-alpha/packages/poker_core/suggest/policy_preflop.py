@@ -62,9 +62,17 @@ def decide_sb_open(
 ) -> PreflopDecision | None:
     """SB first-in open sizing when combo in range."""
 
-    if obs.street != "preflop" or obs.to_call != 0:
+    if obs.street != "preflop":
         return None
     if obs.pot_type != "limped" or not obs.first_to_act:
+        return None
+    # 允许 SB 盲注差额（to_call <= 1bb）仍视为首入开局
+    try:
+        to_call = float(obs.to_call or 0)
+        bb = float(obs.bb or 0)
+    except (TypeError, ValueError):
+        return None
+    if to_call > max(bb, 0.0):
         return None
 
     betlike = pick_betlike_action(obs.acts)
