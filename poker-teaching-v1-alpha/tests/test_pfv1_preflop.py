@@ -61,6 +61,26 @@ def test_sb_rfi_hit(monkeypatch):
     assert "bucket" not in (r.get("meta", {}) or {})
 
 
+def test_sb_rfi_hit_with_call_option(monkeypatch):
+    _set_env(monkeypatch, debug=1)
+    bb = 50
+    p0 = _P(invested=bb // 2, hole=["Ah", "Qd"])  # AQo
+    p1 = _P(invested=bb, hole=["7c", "7d"])  # irrelevant
+    gs = _GS(button=0, to_act=0, bb=bb, p0=p0, p1=p1)
+    to_call = bb // 2
+    acts = [
+        LegalAction(action="fold"),
+        LegalAction(action="call", to_call=to_call),
+        LegalAction(action="raise", min=bb, max=100 * bb),
+    ]
+    _patch_acts(monkeypatch, acts)
+    r = build_suggestion(gs, 0)
+    assert r["suggested"]["action"] == "raise"
+    assert r["suggested"]["amount"] == int(round(2.5 * bb))
+    assert r.get("meta", {}).get("open_bb") == 2.5
+    assert any(x.get("code") == "PF_OPEN_RANGE_HIT" for x in r["rationale"])
+
+
 def test_sb_rfi_miss(monkeypatch):
     _set_env(monkeypatch)
     bb = 50
