@@ -706,7 +706,7 @@ def policy_flop_v1(
             return suggested, rationale, "flop_v1", meta
         # semi-bluff raise vs small when we have strong_draw (IP preferred but allow both)
         if (
-            fst == "third"
+            fst in {"third", "half"}
             and getattr(obs, "hand_class", "") in {HC_STRONG_DRAW}
             and find_action(acts, "raise")
         ):
@@ -721,6 +721,24 @@ def policy_flop_v1(
             rationale.extend(decision_rationale)
             return suggested, rationale, "flop_v1", meta
     if fst in {"third", "half"} and find_action(acts, "call"):
+        if (
+            allow_value_raise
+            and getattr(obs, "spr_bucket", "") == "le3"
+            and getattr(obs, "hand_class", "") in {HC_OP_TPTK}
+            and find_action(acts, "raise")
+        ):
+            decision = Decision(
+                action="raise",
+                sizing=SizeSpec.tag("two_third"),
+                meta={"size_tag": "two_third"},
+            )
+            suggested, decision_meta, decision_rationale = decision.resolve(obs, acts, cfg)
+            meta.update(decision_meta)
+            rationale.append(R(SCodes.FL_RAISE_VALUE))
+            rationale.extend(decision_rationale)
+            if not meta.get("plan"):
+                meta["plan"] = "低 SPR：强顶对面对小注→价值加注"
+            return suggested, rationale, "flop_v1", meta
         decision = Decision(action="call", meta={})
         suggested, decision_meta, decision_rationale = decision.resolve(obs, acts, cfg)
         meta.update(decision_meta)
@@ -740,6 +758,26 @@ def policy_flop_v1(
         rationale.append(R(SCodes.FL_RAISE_SEMI_BLUFF))
         rationale.extend(decision_rationale)
         return suggested, rationale, "flop_v1", meta
+    if fst == "two_third+" and find_action(acts, "fold"):
+        hand_class = getattr(obs, "hand_class", "")
+        strong_classes = {HC_VALUE, HC_STRONG_DRAW, HC_OP_TPTK}
+        if hand_class not in strong_classes and not bool(meta["nut_adv"]):
+            if pot_odds > 0.40:
+                rationale.append(
+                    R(
+                        SCodes.PL_FOLD_POTODDS,
+                        data={
+                            "facing": fst,
+                            "pot_odds": round(pot_odds, 3),
+                            "hand_class": hand_class,
+                        },
+                    )
+                )
+                decision = Decision(action="fold", meta={})
+                suggested, decision_meta, decision_rationale = decision.resolve(obs, acts, cfg)
+                meta.update(decision_meta)
+                rationale.extend(decision_rationale)
+                return suggested, rationale, "flop_v1", meta
     if find_action(acts, "call"):
         decision = Decision(action="call", meta={})
         suggested, decision_meta, decision_rationale = decision.resolve(obs, acts, cfg)

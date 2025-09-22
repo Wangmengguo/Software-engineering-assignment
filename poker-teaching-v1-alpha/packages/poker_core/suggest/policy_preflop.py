@@ -193,8 +193,6 @@ def decide_sb_vs_threebet(
     # Only handle SB vs BB 3bet scenario
     if obs.last_to_act:  # BB should be last to act in SB vs BB 3bet
         return None
-    if not ctx.flags.enable_preflop_4bet:
-        return None
 
     combo = obs.combo or ""
     vs_sb = ctx.vs_table.get("SB_vs_BB_3bet", {}) or {}
@@ -248,18 +246,22 @@ def decide_sb_vs_threebet(
         )
         return PreflopDecision(decision, rationale, meta={})
 
-    # Fallback: only call if pot odds are very good or 3bet is small
+    # Fallback: call if pot odds are good or 3bet is small
     if find_action(obs.acts, "call"):
         pot_odds = obs.to_call / (obs.pot_now + obs.to_call) if obs.pot_now and obs.to_call else 0
-        # Only call if pot odds > 40% or 3bet is very small (< 2.2bb)
-        if pot_odds > 0.4 or threebet_to_bb < 2.2:
+        modes = ctx.modes.get("HU", {}) if isinstance(ctx.modes, dict) else {}
+        thr = float(modes.get("defend_threshold_ip", 0.42))
+        # Call if pot odds <= threshold or 3bet is very small (< 2.2bb)
+        if pot_odds <= thr or threebet_to_bb < 2.2:
             rationale.append(
                 R(
                     SCodes.PF_DEFEND_PRICE_OK,
-                    data={"pot_odds": round(pot_odds, 3), "bucket": bucket},
+                    data={"pot_odds": round(pot_odds, 3), "bucket": bucket, "thr": thr},
                 )
             )
-            decision = Decision(action="call", meta={"bucket": bucket})
+            decision = Decision(
+                action="call", meta={"bucket": bucket, "pot_odds": round(pot_odds, 4)}
+            )
             return PreflopDecision(decision, rationale, meta={})
 
     if find_action(obs.acts, "fold"):

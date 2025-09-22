@@ -13,19 +13,6 @@ def test_suggest_context_loads_config(monkeypatch):
     assert ctx.profile.strategy_name in {"loose", "medium", "tight"}
 
 
-@pytest.mark.parametrize("value,expected", [(None, False), ("0", False), ("1", True)])
-def test_preflop_fourbet_toggle(monkeypatch, value, expected):
-    from poker_core.suggest.context import SuggestContext
-
-    if value is None:
-        monkeypatch.delenv("SUGGEST_PREFLOP_ENABLE_4BET", raising=False)
-    else:
-        monkeypatch.setenv("SUGGEST_PREFLOP_ENABLE_4BET", value)
-
-    ctx = SuggestContext.build()
-    assert ctx.flags.enable_preflop_4bet is expected
-
-
 @pytest.mark.parametrize("value,expected", [(None, True), ("1", True), ("0", False)])
 def test_flop_value_raise_toggle(monkeypatch, value, expected):
     from poker_core.suggest.context import SuggestContext
