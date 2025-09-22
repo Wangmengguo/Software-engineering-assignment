@@ -12,7 +12,7 @@
       {% if suggest.meta.plan %}
         <div class="text-[rgb(var(--muted))]">
           {% if suggest.debug.meta.role %}{{ suggest.debug.meta.role|upper }}{% elif suggest.meta.role %}{{ suggest.meta.role|upper }}{% else %}{% if suggest.meta.ip %}IP{% else %}OOP{% endif %}{% endif %}
-          · {{ suggest.debug.meta.board_texture|default:suggest.meta.texture }} · SPR {{ suggest.debug.meta.spr_bucket|default:suggest.meta.spr_bucket }}：
+          · {{ suggest.debug.meta.board_texture|default:"" }} · SPR {{ suggest.debug.meta.spr_bucket|default:"" }}：
           <span class="text-[rgb(var(--text))]">{{ suggest.meta.plan }}</span>
           {% if suggest.meta.size_tag %}<span class="text-[rgb(var(--muted))]">（建议 {{ suggest.meta.size_tag }}）</span>{% endif %}
         </div>
