@@ -84,8 +84,11 @@ export SUGGEST_TABLE_MODE=HU
 - 单次：`python scripts/suggest_debug_tool.py single --policy auto --pct 10 --debug 1 --seed 42 --button 0`
 - 灰度分布：`python scripts/suggest_debug_tool.py dist --policy auto --pct 10 --debug 1 --count 2000 --show-sample 8`
 
-— 策略关键口径 —
+-— 策略关键口径 —
 - 赔率：`pot_odds = to_call / (pot_now + to_call)`；`pot_now = pot + sum(invested_street)`（不含本次待跟注）。
+- SB vs 3bet 兜底：仅当 `pot_odds <= defend_threshold_ip`（默认 0.42）或三注极小（<2.2bb）时补跟，其余 fallback 直接弃牌。
+- Flop 对大尺吋防守：面对 `two_third+`、无坚果优势且手牌不在 `{HC_VALUE, HC_STRONG_DRAW, HC_OP_TPTK}` 时，`pot_odds > 0.40` 触发保守弃牌。
+- Flop 半诈唬/价值加注：`HC_STRONG_DRAW` 现可对 `third|half` 下注选择 `SizeSpec.tag("half")` 半诈唬加注；低 SPR (`le3`) 的 `HC_OP_TPTK` 面对 `third|half` 自动升级到 `two_third` 价值加注。
 - 最小重开（postflop raise to‑amount）：若目标金额 < `raise.min`，提升至 `raise.min` → 再参与合法区间钳制（越界触发 `W_CLAMPED`）。
 - 对抗三桶阈值：来自 `table_modes_{strategy}.json` 的 `threebet_bucket_small_le/mid_le`。
 - SB 4‑bet：开关 `SUGGEST_PREFLOP_ENABLE_4BET=1` 才启用，读取 `SB_vs_BB_3bet` 的 `fourbet/call` 集合与 `fourbet_ip_mult/cap_ratio_4b`。
@@ -115,8 +118,7 @@ export SUGGEST_TABLE_MODE=HU
 
 — 变更记录（本 PR） —
 - 新增 explanations 渲染（中文），服务层注入 `resp.explanations`。
-- Preflop v1 路径统一 `meta.plan`；SB vs 3bet 支持 4bet（开关可控）。
+- Preflop v1 路径统一 `meta.plan`；SB vs 3bet 支持 4bet。
 - Flop v1：value‑raise JSON 化与 `rule_path` 追踪。
 - Turn/River v1：规则加载与策略接入，统一 `size_tag/mdf/pot_odds/facing_size_tag/plan`；修复 SPR 键映射命中 JSON。
 - 统一“最小重开”码名为 `FL_MIN_REOPEN_ADJUSTED`（详见 `packages/poker_core/suggest/MIGRATION_GUIDE.md`）。
-

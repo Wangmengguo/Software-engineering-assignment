@@ -13,7 +13,7 @@ def _ctx() -> SuggestContext:
         open_table={},
         vs_table={},
         versions={"open": 1, "vs": 1, "modes": 1},
-        flags=SuggestFlags(enable_preflop_4bet=True, enable_flop_value_raise=True),
+        flags=SuggestFlags(enable_flop_value_raise=True),
         profile=SuggestProfile(strategy_name="medium", config_profile="builtin"),
     )
 

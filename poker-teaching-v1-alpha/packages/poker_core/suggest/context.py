@@ -18,7 +18,6 @@ from .preflop_tables import (
 
 @dataclass(frozen=True)
 class SuggestFlags:
-    enable_preflop_4bet: bool
     enable_flop_value_raise: bool
 
 
@@ -44,7 +43,6 @@ class SuggestContext:
         modes, ver_modes = get_modes()
 
         flags = SuggestFlags(
-            enable_preflop_4bet=_env_flag("SUGGEST_PREFLOP_ENABLE_4BET", default=False),
             enable_flop_value_raise=_env_flag("SUGGEST_FLOP_VALUE_RAISE", default=True),
         )
 
