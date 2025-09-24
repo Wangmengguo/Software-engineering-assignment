@@ -1,6 +1,0 @@
-- Scaffold
-- OpenAPI v1
-- Domain core
-- CI baseline
-- Minimal demo
-- ADR-001/002 included
